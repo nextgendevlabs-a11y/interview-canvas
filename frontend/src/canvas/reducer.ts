@@ -9,7 +9,9 @@ export function applyOperation(snapshot: CanvasSnapshotData, op: CanvasOperation
   switch (op.op) {
     case 'add': {
       const items = { ...snapshot.items, [op.item.id]: op.item };
-      const item_order = [...snapshot.item_order, op.item.id];
+      const item_order = snapshot.item_order.includes(op.item.id)
+        ? snapshot.item_order
+        : [...snapshot.item_order, op.item.id];
       return { ...snapshot, items, item_order };
     }
     case 'update': {

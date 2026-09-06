@@ -71,7 +71,11 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
         break;
       case 'document_update':
         setSnapshot((prev) => {
-          return applyOperation(prev, msg.operation);
+          const next = applyOperation(prev, msg.operation);
+          if (pendingSnapshotRef.current) {
+            pendingSnapshotRef.current = next;
+          }
+          return next;
         });
         break;
       case 'presence_update':

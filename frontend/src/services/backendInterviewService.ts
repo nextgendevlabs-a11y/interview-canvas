@@ -35,16 +35,19 @@ const USER_KEY = 'interview_canvas.user';
 const PARTICIPANT_TOKEN_KEY = 'interview_canvas.participant_token';
 
 function apiBaseUrl(): string {
-  return (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
+  const configured = import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL;
+  const withoutTrailingSlash = configured.replace(/\/$/, '');
+  return withoutTrailingSlash.endsWith('/v1') ? withoutTrailingSlash : `${withoutTrailingSlash}/v1`;
 }
 
 function wsBaseUrl(httpBaseUrl: string): string {
   const configured = import.meta.env.VITE_WS_BASE_URL;
-  if (configured) return configured.replace(/\/$/, '');
+  if (configured) return configured.replace(/\/$/, '').replace(/\/v1$/, '');
 
   const url = new URL(httpBaseUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  return url.toString().replace(/\/v1\/?$/, '');
+  url.pathname = url.pathname.replace(/\/v1\/?$/, '');
+  return url.toString().replace(/\/$/, '');
 }
 
 function storageGet<T>(key: string): T | null {
@@ -67,6 +70,16 @@ export class BackendInterviewService implements InterviewService {
   private participantToken: string | null = localStorage.getItem(PARTICIPANT_TOKEN_KEY);
   private currentUser: User | null = storageGet<User>(USER_KEY);
   private socket: WebSocket | null = null;
+  private activeSubscription: {
+    session_id: string;
+    participant_id: string;
+    handlers: {
+      onMessage: (msg: WsOutboundMessage) => void;
+      onStatusChange: (status: ConnectionStatus) => void;
+    };
+  } | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
   private queuedMessages: WsInboundMessage[] = [];
   private cachedGuestDetails: Map<string, SessionDetails> = new Map();
 
@@ -188,8 +201,32 @@ export class BackendInterviewService implements InterviewService {
       onStatusChange: (status: ConnectionStatus) => void;
     },
   ): CanvasSubscription {
-    this.socket?.close();
+    this.closeSocket();
     this.queuedMessages = [];
+    this.reconnectAttempts = 0;
+    this.activeSubscription = { session_id, participant_id, handlers };
+    this.openSocket();
+
+    return {
+      unsubscribe: () => {
+        this.activeSubscription = null;
+        this.closeSocket();
+      },
+    };
+  }
+
+  send(message: WsInboundMessage): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+      return;
+    }
+    this.queuedMessages.push(message);
+  }
+
+  private openSocket(): void {
+    const subscription = this.activeSubscription;
+    if (!subscription) return;
+    const { session_id, participant_id, handlers } = subscription;
 
     const params = new URLSearchParams({ participant_id });
     if (this.authToken) params.set('access_token', this.authToken);
@@ -200,6 +237,7 @@ export class BackendInterviewService implements InterviewService {
     handlers.onStatusChange('reconnecting');
 
     socket.onopen = () => {
+      this.reconnectAttempts = 0;
       handlers.onStatusChange('connected');
       socket.send(JSON.stringify({ type: 'join_room', session_id }));
       for (const message of this.queuedMessages) {
@@ -214,23 +252,34 @@ export class BackendInterviewService implements InterviewService {
       handlers.onStatusChange('offline');
     };
     socket.onclose = () => {
-      if (this.socket === socket) handlers.onStatusChange('offline');
-    };
-
-    return {
-      unsubscribe: () => {
-        if (this.socket === socket) this.socket = null;
-        socket.close();
-      },
+      if (this.socket !== socket) return;
+      this.socket = null;
+      handlers.onStatusChange('offline');
+      this.scheduleReconnect();
     };
   }
 
-  send(message: WsInboundMessage): void {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(message));
-      return;
+  private scheduleReconnect(): void {
+    if (!this.activeSubscription || this.reconnectTimer) return;
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 10000);
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.openSocket();
+    }, delay);
+  }
+
+  private closeSocket(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
-    this.queuedMessages.push(message);
+    if (this.socket) {
+      const socket = this.socket;
+      this.socket = null;
+      socket.onclose = null;
+      socket.close();
+    }
   }
 
   private setAuth(result: AuthResult): void {

@@ -23,8 +23,10 @@ class ConnectionManager:
         sockets = self.rooms.get(session_id, [])
         self.rooms[session_id] = [socket for socket in sockets if socket is not websocket]
 
-    async def broadcast(self, session_id: str, message: dict[str, Any]) -> None:
+    async def broadcast(self, session_id: str, message: dict[str, Any], exclude: WebSocket | None = None) -> None:
         for websocket in list(self.rooms.get(session_id, [])):
+            if websocket is exclude:
+                continue
             await websocket.send_json(message)
 
     def broadcast_json(self, session_id: str, message: dict[str, Any]) -> None:
@@ -103,6 +105,7 @@ async def session_socket(websocket: WebSocket, session_id: str, participant_id: 
                     await connection_manager.broadcast(
                         session_id,
                         message.model_dump(mode="json"),
+                        exclude=websocket,
                     )
                 case "presence_update":
                     existing = record.presence.get(participant_id, participant_presence(participant_id).model_dump())

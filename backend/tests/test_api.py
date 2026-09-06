@@ -146,9 +146,49 @@ def test_websocket_room_join_and_document_update() -> None:
                 },
             }
         )
-        update = ws.receive_json()
-        assert update["type"] == "document_update"
-        assert update["operation"]["op"] == "add"
 
     loaded = api.get(f"/v1/sessions/{session['id']}/canvas", headers={"X-Participant-Token": participant_token})
     assert loaded.json()["items"]["note-1"]["text"] == "hello"
+
+
+def test_websocket_document_update_reaches_other_clients() -> None:
+    api = client()
+    headers = auth_headers(api)
+    session = api.post("/v1/sessions", headers=headers, json={"title": "Socket Broadcast", "prompt": ""}).json()
+    link = api.post(f"/v1/sessions/{session['id']}/guest-links", headers=headers, json={}).json()
+    joined = api.post(f"/v1/join/{link['token']}", json={"display_name": "Candidate"}).json()
+    participant_id = joined["participant"]["id"]
+    participant_token = joined["participant_token"]
+    owner_token = headers["Authorization"].split(" ", 1)[1]
+
+    owner_url = f"/v1/ws/sessions/{session['id']}?participant_id=owner&access_token={owner_token}"
+    candidate_url = f"/v1/ws/sessions/{session['id']}?participant_id={participant_id}&participant_token={participant_token}"
+
+    with api.websocket_connect(owner_url) as owner_ws, api.websocket_connect(candidate_url) as candidate_ws:
+        assert owner_ws.receive_json()["type"] == "room_joined"
+        assert candidate_ws.receive_json()["type"] == "room_joined"
+
+        owner_ws.send_json(
+            {
+                "type": "document_update",
+                "session_id": session["id"],
+                "operation": {
+                    "op": "add",
+                    "item": {
+                        "kind": "sticky",
+                        "id": "note-2",
+                        "x": 10,
+                        "y": 20,
+                        "width": 120,
+                        "height": 120,
+                        "text": "broadcast",
+                        "color": "#fde68a",
+                        "z": 1,
+                    },
+                },
+            }
+        )
+
+        update = candidate_ws.receive_json()
+        assert update["type"] == "document_update"
+        assert update["operation"]["item"]["id"] == "note-2"
