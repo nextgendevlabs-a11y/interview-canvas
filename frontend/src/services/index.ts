@@ -1,5 +1,5 @@
 import type { InterviewService } from './interviewService';
-import { getMockService } from './mockInterviewService';
+import { getBackendService } from './backendInterviewService';
 
 export type { InterviewService, CanvasSubscription } from './interviewService';
 export * from './types';
@@ -8,7 +8,7 @@ let _service: InterviewService | null = null;
 
 export function getService(): InterviewService {
   if (!_service) {
-    _service = getMockService();
+    _service = getBackendService();
   }
   return _service;
 }

@@ -4,7 +4,7 @@ import type { ParticipantRole } from '@/services/types';
 
 interface LobbyProps {
   token: string;
-  onJoined: (participantId: string, sessionId: string) => void;
+  onJoined: (participantId: string, sessionId: string, participantName: string, color: string) => void;
   onError: (message: string) => void;
 }
 
@@ -47,7 +47,7 @@ export function Lobby({ token, onJoined, onError }: LobbyProps) {
     try {
       const svc = getService();
       const { participant } = await svc.joinSession(token, displayName.trim());
-      onJoined(participant.id, sessionId);
+      onJoined(participant.id, sessionId, participant.display_name, participant.color);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to join');
     } finally {

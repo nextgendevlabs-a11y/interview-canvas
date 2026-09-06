@@ -11,9 +11,7 @@ import type {
   User,
   WsInboundMessage,
   WsOutboundMessage,
-  PresenceState,
 } from './types';
-import { PARTICIPANT_COLORS } from '@/canvas/palette';
 
 export interface CanvasSubscription {
   unsubscribe: () => void;
@@ -42,7 +40,7 @@ export interface InterviewService {
 
   // Join
   validateToken(token: string): Promise<{ session_id: string; session_title: string; role: ParticipantRole }>;
-  joinSession(token: string, display_name: string): Promise<{ participant: Participant; session: InterviewSession }>;
+  joinSession(token: string, display_name: string): Promise<{ participant: Participant; session: InterviewSession; participant_token?: string | null }>;
 
   // Canvas
   getCanvasSnapshot(session_id: string): Promise<CanvasSnapshotData>;

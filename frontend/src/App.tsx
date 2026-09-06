@@ -27,7 +27,6 @@ function parseHash(): { route: Route; token?: string } {
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'auth' });
-  const [participantColor, setParticipantColor] = useState(PARTICIPANT_COLORS[0]);
 
   useEffect(() => {
     const svc = getService();
@@ -71,23 +70,15 @@ function App() {
   };
 
   const handleSessionCreated = (id: string) => {
-    setParticipantColor(PARTICIPANT_COLORS[0]);
     setRoute({ name: 'room', sessionId: id, participantId: 'owner', color: PARTICIPANT_COLORS[0], participantName: user?.display_name ?? 'Owner', isOwner: true });
   };
 
   const handleOpenSession = (id: string) => {
-    setParticipantColor(PARTICIPANT_COLORS[0]);
     setRoute({ name: 'room', sessionId: id, participantId: 'owner', color: PARTICIPANT_COLORS[0], participantName: user?.display_name ?? 'Owner', isOwner: true });
   };
 
-  const handleJoined = (participantId: string, sessionId: string) => {
-    const svc = getService();
-    const colorIdx = Math.floor(Math.random() * PARTICIPANT_COLORS.length);
-    const color = PARTICIPANT_COLORS[colorIdx];
-    setParticipantColor(color);
-    const currentUser = svc.getCurrentUser();
-    const name = currentUser?.display_name ?? 'Participant';
-    setRoute({ name: 'room', sessionId, participantId, color, participantName: name, isOwner: false });
+  const handleJoined = (participantId: string, sessionId: string, participantName: string, color: string) => {
+    setRoute({ name: 'room', sessionId, participantId, color, participantName, isOwner: false });
   };
 
   const handleLeave = () => {
