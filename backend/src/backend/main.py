@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 
 from backend.routers import auth, canvas, guest_links, join, realtime, sessions
 from backend.routers.realtime import ConnectionManager
-from backend.store import MemoryStore
+from backend.store import DatabaseStore
 
-store = MemoryStore(seed=True)
+store = DatabaseStore(seed=True)
 connection_manager = ConnectionManager()
 
 

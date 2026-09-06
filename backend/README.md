@@ -1,12 +1,19 @@
 # Interview Canvas Backend
 
-FastAPI implementation of the root `openapi.yaml` contract, backed by an in-memory store.
+FastAPI implementation of the root `openapi.yaml` contract, backed by SQLAlchemy.
 
 ## Run
 
 ```powershell
 uv sync
 uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8091
+```
+
+The server reads `DATABASE_URL` for its SQLAlchemy connection string. It defaults to `sqlite:///./interview_canvas.db`.
+For example, in PowerShell:
+
+```powershell
+$env:DATABASE_URL = "sqlite:///./interview_canvas.db"
 ```
 
 Or on Windows:
@@ -30,7 +37,7 @@ Or on Windows:
 
 ## Seed Data
 
-The store resets on process restart and starts with demo data:
+An empty database is initialized with demo data:
 
 - Email: `demo@interview.dev`
 - Password: `password`

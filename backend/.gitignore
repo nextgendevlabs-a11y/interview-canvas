@@ -1,4 +1,5 @@
-.venv/
+interview_canvas.db
+interview_canvas.db-shm
+interview_canvas.db-wal
 __pycache__/
-*.py[cod]
 .pytest_cache/
