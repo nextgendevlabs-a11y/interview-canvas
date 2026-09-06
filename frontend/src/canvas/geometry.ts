@@ -121,8 +121,19 @@ export function hitTest(
     if (item.kind === 'freehand') {
       if (distanceToStroke(point, item.points, 8)) return item.id;
     } else if (item.kind === 'connector') {
-      const from = getConnectorStart(item);
-      const to = getConnectorEnd(item);
+      let from = item.from_point;
+      let to = item.to_point;
+      if (item.from_id && items[item.from_id]?.kind === 'shape') {
+        const fromShape = items[item.from_id] as ShapeElement;
+        const target = to ?? getShapeCenter(fromShape);
+        from = getConnectorAnchorPoint(fromShape, target);
+      }
+      if (item.to_id && items[item.to_id]?.kind === 'shape') {
+        const toShape = items[item.to_id] as ShapeElement;
+        const source = from ?? getShapeCenter(toShape);
+        to = getConnectorAnchorPoint(toShape, source);
+      }
+      if (!from || !to) continue;
       if (distanceToStroke(point, [from, to], 8)) return item.id;
     } else if (item.kind === 'text') {
       if (pointInBounds(point, { ...bounds, width: 200, height: item.font_size + 8 })) return item.id;

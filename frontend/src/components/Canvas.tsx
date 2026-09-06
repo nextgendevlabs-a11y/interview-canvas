@@ -16,6 +16,14 @@ interface CanvasProps {
 }
 
 const GRID_SIZE = 20;
+const TEXT_BOX_WIDTH = 260;
+const TEXT_LINE_HEIGHT = 20;
+
+interface ConnectorDraft {
+  fromId: string;
+  start: { x: number; y: number };
+  current: { x: number; y: number };
+}
 
 export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, onOperation }: CanvasProps) {
   const [tool, setTool] = useState<Tool>('select');
@@ -30,7 +38,7 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [freehandPoints, setFreehandPoints] = useState<{ x: number; y: number }[]>([]);
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectRect, setSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [connectorStart, setConnectorStart] = useState<string | null>(null);
+  const [connectorDraft, setConnectorDraft] = useState<ConnectorDraft | null>(null);
   const [editingText, setEditingText] = useState<string | null>(null);
   const [editingTextValue, setEditingTextValue] = useState('');
   const [showPalette, setShowPalette] = useState(false);
@@ -97,25 +105,9 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
     if (tool === 'connector') {
       const hitId = hitTest(snapshot.items, snapshot.item_order, world);
       if (hitId && snapshot.items[hitId].kind === 'shape') {
-        if (!connectorStart) {
-          setConnectorStart(hitId);
-        } else {
-          const conn = createConnector(connectorStart, hitId, null, null);
-          const op: CanvasOperation = { op: 'add', item: conn };
-          applyAndBroadcast(op);
-          setConnectorStart(null);
-        }
-      } else {
-        if (connectorStart) {
-          const fromShape = snapshot.items[connectorStart];
-          if (fromShape && fromShape.kind === 'shape') {
-            const anchor = getConnectorAnchorPoint(fromShape as ShapeElement, world);
-            const conn = createConnector(connectorStart, null, anchor, world);
-            const op: CanvasOperation = { op: 'add', item: conn };
-            applyAndBroadcast(op);
-            setConnectorStart(null);
-          }
-        }
+        const shape = snapshot.items[hitId] as ShapeElement;
+        const start = getConnectorAnchorPoint(shape, world);
+        setConnectorDraft({ fromId: hitId, start, current: world });
       }
       return;
     }
@@ -147,6 +139,11 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
 
     const world = screenToWorld(e.clientX, e.clientY);
 
+    if (connectorDraft) {
+      setConnectorDraft((draft) => draft ? { ...draft, current: world } : null);
+      return;
+    }
+
     if (isDrawing) {
       setFreehandPoints((prev) => [...prev, world]);
       return;
@@ -171,6 +168,23 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isPanning) {
       setIsPanning(false);
+      return;
+    }
+
+    if (connectorDraft) {
+      const world = screenToWorld(e.clientX, e.clientY);
+      const distance = Math.hypot(world.x - connectorDraft.start.x, world.y - connectorDraft.start.y);
+      if (distance > 8) {
+        const hitId = hitTest(snapshot.items, snapshot.item_order, world);
+        const toId = hitId && snapshot.items[hitId]?.kind === 'shape' && hitId !== connectorDraft.fromId ? hitId : null;
+        const conn = toId
+          ? createConnector(connectorDraft.fromId, toId, null, null)
+          : createConnector(connectorDraft.fromId, null, null, world);
+        const op: CanvasOperation = { op: 'add', item: conn };
+        applyAndBroadcast(op);
+        setSelectedIds([conn.id]);
+      }
+      setConnectorDraft(null);
       return;
     }
 
@@ -301,6 +315,10 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   };
 
   const handleLabelEdit = (id: string, newLabel: string) => {
+    if (snapshot.items[id]?.kind === 'text' && newLabel.trim() === '') {
+      setEditingText(null);
+      return;
+    }
     const op: CanvasOperation = { op: 'relabel', id, label: newLabel };
     applyAndBroadcast(op);
     setEditingText(null);
@@ -484,12 +502,19 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
           )}
 
           {/* Render connector preview */}
-          {connectorStart && snapshot.items[connectorStart]?.kind === 'shape' && (
-            (() => {
-              const shape = snapshot.items[connectorStart] as ShapeElement;
-              const center = getShapeCenter(shape);
-              return <circle cx={center.x} cy={center.y} r={6} fill={participantColor} opacity={0.5} />;
-            })()
+          {connectorDraft && (
+            <g pointerEvents="none">
+              <path
+                d={`M ${connectorDraft.start.x} ${connectorDraft.start.y} L ${connectorDraft.current.x} ${connectorDraft.current.y}`}
+                fill="none"
+                stroke={participantColor}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                markerEnd="url(#arrowhead)"
+              />
+              <circle cx={connectorDraft.start.x} cy={connectorDraft.start.y} r={5} fill={participantColor} opacity={0.75} />
+              <circle cx={connectorDraft.current.x} cy={connectorDraft.current.y} r={4} fill={participantColor} opacity={0.45} />
+            </g>
           )}
         </g>
       </svg>
@@ -624,6 +649,7 @@ function CanvasItemRenderer({
 }) {
   const strokeColor = selected ? '#3b82f6' : 'transparent';
   const strokeWidth = selected ? 2 : 0;
+  const stopCanvasInput = (e: React.SyntheticEvent) => e.stopPropagation();
 
   if (item.kind === 'shape') {
     const isRounded = item.shape_type === 'rounded' || item.shape_type === 'function';
@@ -676,8 +702,8 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={stopCanvasInput}
+              onPointerDown={stopCanvasInput}
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if (e.key === 'Enter') onEditingBlur();
@@ -740,74 +766,75 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={stopCanvasInput}
+              onPointerDown={stopCanvasInput}
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onEditingBlur();
               }}
-              className="w-full h-full text-sm bg-transparent outline-none resize-none"
+              className="w-full h-full text-sm leading-5 bg-white/60 outline-none resize-none overflow-auto"
             />
           </foreignObject>
         ) : (
-          <text
-            x={item.x + 10}
-            y={item.y + 20}
-            className="text-sm select-none cursor-text"
-            fill="#1e293b"
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              onBeginEdit();
-            }}
-          >
-            {item.text}
-          </text>
+          <foreignObject x={item.x + 10} y={item.y + 10} width={item.width - 20} height={item.height - 20}>
+            <div
+              className="h-full overflow-hidden text-sm leading-5 text-slate-900 whitespace-pre-wrap break-words select-none cursor-text"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onBeginEdit();
+              }}
+            >
+              {item.text}
+            </div>
+          </foreignObject>
         )}
       </g>
     );
   }
 
   if (item.kind === 'text') {
+    const textLines = Math.max(1, editingValue.split('\n').length);
+    const editorHeight = Math.max(44, Math.min(180, textLines * TEXT_LINE_HEIGHT + 16));
+    const displayHeight = Math.max(32, item.text.split('\n').length * TEXT_LINE_HEIGHT + 8);
     return (
       <g>
         {editing ? (
-          <foreignObject x={item.x} y={item.y - 4} width={250} height={item.font_size + 12}>
-            <input
+          <foreignObject x={item.x} y={item.y - 4} width={TEXT_BOX_WIDTH} height={editorHeight}>
+            <textarea
               autoFocus
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={stopCanvasInput}
+              onPointerDown={stopCanvasInput}
               onKeyDown={(e) => {
                 e.stopPropagation();
-                if (e.key === 'Enter') onEditingBlur();
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onEditingBlur();
               }}
-              className="text-sm bg-white border border-blue-400 rounded px-1 outline-none"
+              className="w-full h-full bg-white border border-blue-400 rounded px-2 py-1 outline-none resize-none"
               style={{ color: item.color, fontSize: item.font_size }}
             />
           </foreignObject>
         ) : (
-          <text
-            x={item.x}
-            y={item.y + item.font_size}
-            className="text-sm font-medium select-none cursor-text"
-            fill={item.color}
-            style={{ fontSize: item.font_size }}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              onBeginEdit();
-            }}
-          >
-            {item.text}
-          </text>
+          <foreignObject x={item.x} y={item.y} width={TEXT_BOX_WIDTH} height={displayHeight}>
+            <div
+              className="font-medium whitespace-pre-wrap break-words select-none cursor-text"
+              style={{ color: item.color, fontSize: item.font_size, lineHeight: `${TEXT_LINE_HEIGHT}px` }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onBeginEdit();
+              }}
+            >
+              {item.text}
+            </div>
+          </foreignObject>
         )}
         {selected && (
           <rect
             x={item.x - 4}
             y={item.y - 4}
-            width={258}
-            height={item.font_size + 12}
+            width={TEXT_BOX_WIDTH + 8}
+            height={(editing ? editorHeight : displayHeight) + 8}
             rx={4}
             fill="none"
             stroke={strokeColor}
@@ -867,8 +894,8 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={stopCanvasInput}
+              onPointerDown={stopCanvasInput}
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if (e.key === 'Enter') onEditingBlur();

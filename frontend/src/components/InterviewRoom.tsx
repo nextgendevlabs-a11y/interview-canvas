@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getService } from '@/services';
-import type { CanvasSnapshotData, CanvasOperation, InterviewSession, Participant, WsOutboundMessage, PresenceState } from '@/services/types';
+import type { CanvasSnapshotData, CanvasOperation, InterviewSession, Participant, WsOutboundMessage } from '@/services/types';
 import { Canvas } from '@/components/Canvas';
 import { createEmptySnapshot, applyOperation } from '@/canvas/reducer';
 
@@ -18,7 +18,6 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [snapshot, setSnapshot] = useState<CanvasSnapshotData>(createEmptySnapshot());
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('reconnecting');
-  const [presence, setPresence] = useState<PresenceState[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -50,7 +49,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
       sub.unsubscribe();
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [sessionId, participantId]);
+  }, [sessionId, participantId, loadSession]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -68,6 +67,15 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   }, [sessionId]);
 
   useEffect(() => {
+    if (!isOwner) return;
+    const interval = setInterval(() => {
+      loadSession().catch(() => {});
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isOwner, loadSession]);
+
+  useEffect(() => {
     if (session?.state === 'live' && session.started_at) {
       const start = new Date(session.started_at).getTime();
       const interval = setInterval(() => {
@@ -81,7 +89,6 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
     switch (msg.type) {
       case 'room_joined':
         setSnapshot(msg.snapshot);
-        setPresence(msg.participants);
         setConnectionStatus('connected');
         break;
       case 'document_update':
@@ -94,16 +101,30 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
         });
         break;
       case 'presence_update':
-        setPresence((prev) => {
-          const existing = prev.find((p) => p.participant_id === msg.participant_id);
-          if (existing) {
-            return prev.map((p) => p.participant_id === msg.participant_id ? { ...p, cursor: msg.cursor, selected_ids: msg.selected_ids } : p);
-          }
-          return [...prev, { participant_id: msg.participant_id, display_name: 'Participant', color: '#94a3b8', cursor: msg.cursor, selected_ids: msg.selected_ids }];
-        });
         break;
       case 'presence_snapshot':
-        setPresence(msg.participants);
+        break;
+      case 'participant_joined':
+        setParticipants((prev) => {
+          if (prev.some((p) => p.id === msg.participant.participant_id)) return prev;
+          return [
+            ...prev,
+            {
+              id: msg.participant.participant_id,
+              session_id: msg.session_id,
+              user_id: null,
+              display_name: msg.participant.display_name,
+              role: 'candidate',
+              color: msg.participant.color,
+              joined_at: new Date().toISOString(),
+              left_at: null,
+              is_active: true,
+            },
+          ];
+        });
+        break;
+      case 'participant_left':
+        setParticipants((prev) => prev.map((p) => p.id === msg.participant_id ? { ...p, is_active: false, left_at: new Date().toISOString() } : p));
         break;
       case 'session_ended':
         setSession((prev) => prev ? { ...prev, state: 'ended' } : null);

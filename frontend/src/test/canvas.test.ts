@@ -1,5 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { resetMockService, getMockService } from '@/services/mockInterviewService';
+import { describe, it, expect } from 'vitest';
 import { createEmptySnapshot, applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo } from '@/canvas/reducer';
 import type { ShapeElement, FreehandStroke, TextLabelElement, StickyNoteElement, ConnectorElement } from '@/services/types';
 

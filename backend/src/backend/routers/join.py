@@ -35,13 +35,13 @@ def validate_token(token: str) -> ValidateTokenResult:
 
 
 @router.post("/{token}", response_model=JoinSessionResult)
-def join_session(token: str, payload: JoinSessionRequest) -> JoinSessionResult:
+async def join_session(token: str, payload: JoinSessionRequest) -> JoinSessionResult:
     from backend.main import connection_manager, store
 
     record, link = validate_link_or_error(token)
     participant = store.add_participant(record.session.id, payload.display_name.strip(), link.role_granted)
     participant_token = store.issue_participant_token(participant.id)
-    connection_manager.broadcast_json(
+    await connection_manager.broadcast(
         record.session.id,
         {
             "type": "participant_joined",

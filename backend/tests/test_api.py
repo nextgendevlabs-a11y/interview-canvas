@@ -192,3 +192,21 @@ def test_websocket_document_update_reaches_other_clients() -> None:
         update = candidate_ws.receive_json()
         assert update["type"] == "document_update"
         assert update["operation"]["item"]["id"] == "note-2"
+
+
+def test_join_broadcasts_participant_joined_to_connected_owner() -> None:
+    api = client()
+    headers = auth_headers(api)
+    session = api.post("/v1/sessions", headers=headers, json={"title": "Join Broadcast", "prompt": ""}).json()
+    link = api.post(f"/v1/sessions/{session['id']}/guest-links", headers=headers, json={}).json()
+    owner_token = headers["Authorization"].split(" ", 1)[1]
+    owner_url = f"/v1/ws/sessions/{session['id']}?participant_id=owner&access_token={owner_token}"
+
+    with api.websocket_connect(owner_url) as owner_ws:
+        assert owner_ws.receive_json()["type"] == "room_joined"
+        joined = api.post(f"/v1/join/{link['token']}", json={"display_name": "Candidate Live"})
+        assert joined.status_code == 200
+
+        message = owner_ws.receive_json()
+        assert message["type"] == "participant_joined"
+        assert message["participant"]["display_name"] == "Candidate Live"

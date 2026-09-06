@@ -9,7 +9,7 @@ import {
   getShapeCenter,
   getConnectorAnchorPoint,
 } from '@/canvas/geometry';
-import { createShape, createConnector, createFreehandStroke, createText, createSticky } from '@/canvas/reducer';
+import { createShape, createConnector, createFreehandStroke, createSticky } from '@/canvas/reducer';
 import type { ShapeElement } from '@/services/types';
 import { PALETTE, getPaletteComponent, PARTICIPANT_COLORS } from '@/canvas/palette';
 
@@ -67,6 +67,16 @@ describe('geometry - hitTest', () => {
     const order = [stroke.id];
     expect(hitTest(items, order, { x: 50, y: 0 })).toBe(stroke.id);
     expect(hitTest(items, order, { x: 50, y: 50 })).toBeNull();
+  });
+
+  it('hits a connector attached to shapes', () => {
+    const shape1 = createShape('service', 0, 0, 100, 80, 'A', '#3b82f6');
+    const shape2 = createShape('service', 300, 0, 100, 80, 'B', '#3b82f6');
+    const connector = createConnector(shape1.id, shape2.id, null, null);
+    const items = { [shape1.id]: shape1, [shape2.id]: shape2, [connector.id]: connector };
+    const order = [shape1.id, shape2.id, connector.id];
+
+    expect(hitTest(items, order, { x: 200, y: 40 })).toBe(connector.id);
   });
 });
 
