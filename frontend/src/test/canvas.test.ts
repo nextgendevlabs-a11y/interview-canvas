@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { resetMockService, getMockService } from '@/services/mockInterviewService';
 import { createEmptySnapshot, applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo } from '@/canvas/reducer';
-import type { ShapeElement, FreehandStroke, TextLabelElement, StickyNoteElement } from '@/services/types';
+import type { ShapeElement, FreehandStroke, TextLabelElement, StickyNoteElement, ConnectorElement } from '@/services/types';
 
 describe('canvas reducer', () => {
   it('creates an empty snapshot', () => {
@@ -83,6 +83,34 @@ describe('canvas reducer', () => {
     expect(next.items[shape.id]!.kind === 'shape' && (next.items[shape.id]! as ShapeElement).label).toBe('New');
     expect(next.items[text.id]!.kind === 'text' && (next.items[text.id]! as TextLabelElement).text).toBe('New Text');
     expect(next.items[sticky.id]!.kind === 'sticky' && (next.items[sticky.id]! as StickyNoteElement).text).toBe('New Sticky');
+  });
+
+  it('updates connector styling fields', () => {
+    const snap = createEmptySnapshot();
+    const shape1 = createShape('service', 0, 0, 160, 80, 'A', '#3b82f6');
+    const shape2 = createShape('service', 300, 0, 160, 80, 'B', '#3b82f6');
+    const conn = createConnector(shape1.id, shape2.id, null, null) as ConnectorElement;
+    let next = applyOperation(snap, { op: 'add', item: shape1 });
+    next = applyOperation(next, { op: 'add', item: shape2 });
+    next = applyOperation(next, { op: 'add', item: conn });
+
+    const updated: ConnectorElement = {
+      ...conn,
+      label: 'reads',
+      style: 'elbow',
+      arrow_start: true,
+      dashed: true,
+      color: '#2563eb',
+    };
+    next = applyOperation(next, { op: 'update', item: updated });
+
+    expect(next.items[conn.id]).toMatchObject({
+      label: 'reads',
+      style: 'elbow',
+      arrow_start: true,
+      dashed: true,
+      color: '#2563eb',
+    });
   });
 
   it('clears the canvas', () => {

@@ -1,9 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement } from '@/services/types';
+import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement, ConnectorElement } from '@/services/types';
 import { applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo, type CanvasHistory } from '@/canvas/reducer';
-import { PALETTE_CATEGORIES, PALETTE, getPaletteComponent, PARTICIPANT_COLORS } from '@/canvas/palette';
-import { hitTest, hitTestRect, computeBounds, getItemBounds, getConnectorAnchorPoint, getShapeCenter, generateId } from '@/canvas/geometry';
-import { getService } from '@/services';
+import { PALETTE_CATEGORIES, PALETTE, getPaletteComponent } from '@/canvas/palette';
+import { hitTest, hitTestRect, computeBounds, getItemBounds, getConnectorAnchorPoint, getShapeCenter } from '@/canvas/geometry';
 
 export type Tool = 'select' | 'pan' | 'pen' | 'highlighter' | 'eraser' | 'text' | 'sticky' | 'connector';
 
@@ -24,7 +23,6 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [zoom, setZoom] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -38,7 +36,9 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [showPalette, setShowPalette] = useState(false);
   const [history, setHistory] = useState<CanvasHistory>(createHistory());
   const svgRef = useRef<SVGSVGElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedConnector = selectedIds.length === 1 && snapshot.items[selectedIds[0]]?.kind === 'connector'
+    ? snapshot.items[selectedIds[0]] as ConnectorElement
+    : null;
 
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -130,7 +130,6 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
         const item = snapshot.items[hitId];
         const bounds = getItemBounds(item);
         setIsDragging(true);
-        setDragStart(world);
         setDragOffset({ x: world.x - bounds.x, y: world.y - bounds.y });
       }
     } else {
@@ -307,6 +306,23 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
     setEditingText(null);
   };
 
+  const startEditingItem = (item: CanvasItem) => {
+    if (!canEdit) return;
+    setSelectedIds([item.id]);
+    setEditingText(item.id);
+    if (item.kind === 'shape' || item.kind === 'connector') {
+      setEditingTextValue(item.label);
+    } else if (item.kind === 'text' || item.kind === 'sticky') {
+      setEditingTextValue(item.text);
+    }
+  };
+
+  const updateConnector = (updates: Partial<ConnectorElement>) => {
+    if (!selectedConnector) return;
+    const updated: ConnectorElement = { ...selectedConnector, ...updates };
+    applyAndBroadcast({ op: 'update', item: updated });
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (editingText) return;
@@ -429,10 +445,10 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
                 item={item}
                 selected={isSelected}
                 allItems={snapshot.items}
-                onLabelEdit={handleLabelEdit}
                 editing={editingText === id}
                 editingValue={editingTextValue}
                 onEditingValueChange={setEditingTextValue}
+                onBeginEdit={() => startEditingItem(item)}
                 onEditingBlur={() => {
                   if (editingText) handleLabelEdit(editingText, editingTextValue);
                 }}
@@ -478,6 +494,80 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
         </g>
       </svg>
 
+      {selectedConnector && canEdit && (
+        <div className="absolute right-4 bottom-20 z-20 w-72 bg-white rounded-xl shadow-lg border border-slate-200 p-3">
+          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Connector</div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Label</label>
+          <input
+            type="text"
+            value={selectedConnector.label}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onChange={(e) => updateConnector({ label: e.target.value })}
+            className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          />
+
+          <div className="mt-3">
+            <div className="text-xs font-medium text-slate-500 mb-1">Style</div>
+            <div className="grid grid-cols-3 gap-1">
+              {(['straight', 'elbow', 'curved'] as const).map((style) => (
+                <button
+                  key={style}
+                  onClick={() => updateConnector({ style })}
+                  className={`px-2 py-1.5 text-xs rounded-lg border capitalize ${
+                    selectedConnector.style === style ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {style}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={selectedConnector.arrow_start}
+                onChange={(e) => updateConnector({ arrow_start: e.target.checked })}
+              />
+              Start
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={selectedConnector.arrow_end}
+                onChange={(e) => updateConnector({ arrow_end: e.target.checked })}
+              />
+              End
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={selectedConnector.dashed}
+                onChange={(e) => updateConnector({ dashed: e.target.checked })}
+              />
+              Dashed
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-xs font-medium text-slate-500 mb-1">Color</div>
+            <div className="flex gap-1.5">
+              {['#475569', '#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c'].map((color) => (
+                <button
+                  key={color}
+                  onClick={() => updateConnector({ color })}
+                  className={`w-6 h-6 rounded-full border-2 ${selectedConnector.color === color ? 'border-slate-900' : 'border-white'}`}
+                  style={{ backgroundColor: color }}
+                  title={color}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bottom controls */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-white rounded-xl shadow-lg border border-slate-200 px-2 py-1.5">
         <button onClick={handleZoomOut} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors" title="Zoom out">
@@ -517,19 +607,19 @@ function CanvasItemRenderer({
   item,
   selected,
   allItems,
-  onLabelEdit,
   editing,
   editingValue,
   onEditingValueChange,
+  onBeginEdit,
   onEditingBlur,
 }: {
   item: CanvasItem;
   selected: boolean;
   allItems: Record<string, CanvasItem>;
-  onLabelEdit: (id: string, label: string) => void;
   editing: boolean;
   editingValue: string;
   onEditingValueChange: (v: string) => void;
+  onBeginEdit: () => void;
   onEditingBlur: () => void;
 }) {
   const strokeColor = selected ? '#3b82f6' : 'transparent';
@@ -586,7 +676,12 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onKeyDown={(e) => { if (e.key === 'Enter') onEditingBlur(); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') onEditingBlur();
+              }}
               className="w-full text-sm text-center bg-white border border-blue-400 rounded px-1 outline-none"
               style={{ color: item.color }}
             />
@@ -596,9 +691,12 @@ function CanvasItemRenderer({
             x={item.x + item.width / 2}
             y={item.y + item.height / 2 + 5}
             textAnchor="middle"
-            className="text-sm font-medium pointer-events-none select-none"
+            className="text-sm font-medium select-none cursor-text"
             fill={item.color}
-            onDoubleClick={() => { onEditingValueChange(item.label); }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onBeginEdit();
+            }}
           >
             {item.label}
           </text>
@@ -620,7 +718,7 @@ function CanvasItemRenderer({
           fillOpacity={0.85}
           stroke={item.color}
           strokeWidth={1}
-          transform="rotate(-1, ${item.x + item.width/2}, ${item.y + item.height/2})"
+          transform={`rotate(-1, ${item.x + item.width / 2}, ${item.y + item.height / 2})`}
         />
         {selected && (
           <rect
@@ -642,7 +740,12 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) onEditingBlur(); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onEditingBlur();
+              }}
               className="w-full h-full text-sm bg-transparent outline-none resize-none"
             />
           </foreignObject>
@@ -650,9 +753,12 @@ function CanvasItemRenderer({
           <text
             x={item.x + 10}
             y={item.y + 20}
-            className="text-sm pointer-events-none select-none"
+            className="text-sm select-none cursor-text"
             fill="#1e293b"
-            onDoubleClick={() => { onEditingValueChange(item.text); }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onBeginEdit();
+            }}
           >
             {item.text}
           </text>
@@ -671,7 +777,12 @@ function CanvasItemRenderer({
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
               onBlur={onEditingBlur}
-              onKeyDown={(e) => { if (e.key === 'Enter') onEditingBlur(); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') onEditingBlur();
+              }}
               className="text-sm bg-white border border-blue-400 rounded px-1 outline-none"
               style={{ color: item.color, fontSize: item.font_size }}
             />
@@ -680,10 +791,13 @@ function CanvasItemRenderer({
           <text
             x={item.x}
             y={item.y + item.font_size}
-            className="text-sm font-medium pointer-events-none select-none"
+            className="text-sm font-medium select-none cursor-text"
             fill={item.color}
             style={{ fontSize: item.font_size }}
-            onDoubleClick={() => { onEditingValueChange(item.text); }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onBeginEdit();
+            }}
           >
             {item.text}
           </text>
@@ -728,9 +842,6 @@ function CanvasItemRenderer({
       path = `M ${from.x} ${from.y} L ${midX} ${from.y} L ${midX} ${to.y} L ${to.x} ${to.y}`;
     } else {
       const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      const dist = Math.hypot(dx, dy);
-      const curve = Math.min(dist * 0.3, 80);
       const cx1 = from.x + dx * 0.3;
       const cy1 = from.y;
       const cx2 = to.x - dx * 0.3;
@@ -749,17 +860,38 @@ function CanvasItemRenderer({
           markerStart={item.arrow_start ? 'url(#arrowhead-start)' : undefined}
           markerEnd={item.arrow_end ? 'url(#arrowhead)' : undefined}
         />
-        {item.label && (
+        {editing ? (
+          <foreignObject x={(from.x + to.x) / 2 - 90} y={(from.y + to.y) / 2 - 22} width={180} height={28}>
+            <input
+              autoFocus
+              value={editingValue}
+              onChange={(e) => onEditingValueChange(e.target.value)}
+              onBlur={onEditingBlur}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') onEditingBlur();
+              }}
+              className="w-full px-2 py-1 text-xs text-center bg-white border border-blue-400 rounded outline-none"
+              style={{ color: item.color }}
+            />
+          </foreignObject>
+        ) : item.label ? (
           <text
             x={(from.x + to.x) / 2}
             y={(from.y + to.y) / 2 - 6}
             textAnchor="middle"
-            className="text-xs pointer-events-none select-none"
-            fill="#475569"
+            className="text-xs select-none cursor-text"
+            fill={item.color}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onBeginEdit();
+            }}
           >
             {item.label}
           </text>
-        )}
+        ) : null}
         {selected && (
           <path
             d={path}
@@ -806,23 +938,6 @@ function CanvasItemRenderer({
 }
 
 function ToolIcon({ name }: { name: string }) {
-  const icons: Record<string, string> = {
-    select: 'M2 2 L8 18 L10 12 L16 10 Z',
-    pan: 'M9 11 V3 A2 2 0 0 1 13 3 V11 M9 11 V9 A2 2 0 0 1 13 9 V11 M9 11 V7 A2 2 0 0 1 13 7 V11 M9 11 H17 A2 2 0 0 1 19 13 V11 H9',
-    pen: 'M3 17 L14 6 L18 10 L7 21 L3 21 Z',
-    highlighter: 'M3 18 L14 7 L17 10 L6 21 L3 21 Z M14 3 L17 6',
-    eraser: 'M5 15 L12 8 L19 15 L14 20 L5 20 Z',
-    text: 'M4 4 H20 M12 4 V20',
-    sticky: 'M4 4 H16 L20 8 V20 H4 Z',
-    connector: 'M4 12 H20 M16 8 L20 12 L16 16',
-    palette: 'M12 4 A8 8 0 1 0 12 20 C10 20 10 16 12 16 C14 16 16 14 16 12 C16 10 14 4 12 4 Z',
-    'zoom-in': 'M11 4 A7 7 0 1 1 11 18 A7 7 0 1 1 11 4 M11 8 V14 M8 11 H14',
-    'zoom-out': 'M11 4 A7 7 0 1 1 11 18 A7 7 0 1 1 11 4 M8 11 H14',
-    'zoom-fit': 'M4 8 V4 H8 M16 4 H20 V8 M20 16 V20 H16 M8 20 H4 V16',
-    'zoom-reset': 'M12 4 A8 8 0 1 1 12 20 A8 8 0 1 1 12 4 M8 12 H16 M12 8 V16',
-    undo: 'M9 7 L4 12 L9 17 M4 12 H16 A4 4 0 0 1 20 16 V18',
-    redo: 'M15 7 L20 12 L15 17 M20 12 H8 A4 4 0 0 0 4 16 V18',
-  };
   return (
     <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       {name === 'select' && <path d="M2 2 L8 18 L10 12 L16 10 Z" fill="currentColor" />}
