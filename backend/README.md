@@ -9,10 +9,23 @@ uv sync
 uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+Or on Windows:
+
+```powershell
+.\run.ps1
+.\run.ps1 -Port 8091
+```
+
 ## Test
 
 ```powershell
 uv run pytest
+```
+
+Or on Windows:
+
+```powershell
+.\test.ps1
 ```
 
 ## Seed Data
