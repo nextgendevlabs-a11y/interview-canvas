@@ -6,14 +6,14 @@ FastAPI implementation of the root `openapi.yaml` contract, backed by an in-memo
 
 ```powershell
 uv sync
-uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8091
 ```
 
 Or on Windows:
 
 ```powershell
 .\run.ps1
-.\run.ps1 -Port 8091
+.\run.ps1 -Port 8000
 ```
 
 ## Test

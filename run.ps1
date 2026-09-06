@@ -1,5 +1,5 @@
 param(
-    [int]$Port = 8000
+    [int]$Port = 8091
 )
 
 Set-Location -Path $PSScriptRoot\backend

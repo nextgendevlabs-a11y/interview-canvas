@@ -29,7 +29,7 @@ type JoinSessionResponse = {
   participant_token?: string | null;
 };
 
-const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000/v1';
+const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8091/v1';
 const AUTH_TOKEN_KEY = 'interview_canvas.auth_token';
 const USER_KEY = 'interview_canvas.user';
 const PARTICIPANT_TOKEN_KEY = 'interview_canvas.participant_token';

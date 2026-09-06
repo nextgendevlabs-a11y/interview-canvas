@@ -2,9 +2,9 @@
 
 help:
 	@echo "Available targets:"
-	@echo "  make run               Run the FastAPI backend on http://127.0.0.1:8000"
+	@echo "  make run               Run the FastAPI backend on http://127.0.0.1:8091"
 	@echo "  make backend-sync      Install/sync backend dependencies with uv"
-	@echo "  make backend-run       Run the FastAPI backend on http://127.0.0.1:8000"
+	@echo "  make backend-run       Run the FastAPI backend on http://127.0.0.1:8091"
 	@echo "  make backend-test      Run backend tests"
 	@echo "  make frontend-install  Install frontend npm dependencies"
 	@echo "  make frontend-run      Run the Vite frontend on http://127.0.0.1:5173"
@@ -18,7 +18,7 @@ backend-sync:
 	cd backend && uv sync
 
 backend-run:
-	cd backend && uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+	cd backend && uv run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8091
 
 backend-test:
 	cd backend && uv run pytest
