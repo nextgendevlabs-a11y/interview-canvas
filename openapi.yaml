@@ -1,0 +1,1142 @@
+openapi: 3.1.0
+info:
+  title: Interview Canvas API
+  version: 1.0.0
+  description: >
+    Backend API contract expected by the frontend InterviewService in
+    frontend/src/services. Authenticated operations use the bearer token returned
+    by sign-in or sign-up. Guest join operations start from a guest link token.
+servers:
+  - url: /v1
+security: []
+tags:
+  - name: Auth
+  - name: Sessions
+  - name: Guest Links
+  - name: Join
+  - name: Canvas
+  - name: Realtime
+paths:
+  /auth/sign-in:
+    post:
+      tags: [Auth]
+      summary: Sign in with email and password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignInRequest"
+      responses:
+        "200":
+          description: Signed in successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "401":
+          $ref: "#/components/responses/Error"
+  /auth/sign-up:
+    post:
+      tags: [Auth]
+      summary: Create an account and sign in.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignUpRequest"
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResult"
+        "409":
+          $ref: "#/components/responses/Error"
+  /auth/sign-out:
+    post:
+      tags: [Auth]
+      summary: Sign out the current user.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Signed out. No response body.
+        "401":
+          $ref: "#/components/responses/Error"
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Return the current authenticated user.
+      description: Optional hydration endpoint for getCurrentUser-style clients.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Error"
+  /sessions:
+    get:
+      tags: [Sessions]
+      summary: List sessions owned by or available to the current user.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sessions sorted by updated_at descending.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InterviewSession"
+        "401":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [Sessions]
+      summary: Create a new interview session.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionInput"
+      responses:
+        "201":
+          description: Created session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Sessions]
+      summary: Get session details.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Session metadata, participants, and guest links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetails"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [Sessions]
+      summary: Update session title, prompt, or candidate editing controls.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionInput"
+      responses:
+        "200":
+          description: Updated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/start:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Start an interview session.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Session is live.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/end:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: End an interview session.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Session has ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/archive:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Archive a session.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Archived session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Sessions]
+      summary: Duplicate a session as a new draft.
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: New duplicated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/guest-links:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [Guest Links]
+      summary: Create a guest link for a session.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGuestLinkRequest"
+      responses:
+        "201":
+          description: Guest link created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestLink"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/guest-links/{link_id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/GuestLinkId"
+    delete:
+      tags: [Guest Links]
+      summary: Revoke a guest link.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Link revoked. No response body.
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /join/{token}/validate:
+    parameters:
+      - $ref: "#/components/parameters/GuestToken"
+    post:
+      tags: [Join]
+      summary: Validate a guest link token before joining.
+      security: []
+      responses:
+        "200":
+          description: Token is valid and joinable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateTokenResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /join/{token}:
+    parameters:
+      - $ref: "#/components/parameters/GuestToken"
+    post:
+      tags: [Join]
+      summary: Join a session through a guest link.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinSessionRequest"
+      responses:
+        "200":
+          description: Joined session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinSessionResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /sessions/{id}/canvas:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [Canvas]
+      summary: Get the current canvas snapshot.
+      security:
+        - bearerAuth: []
+        - participantAuth: []
+      responses:
+        "200":
+          description: Current canvas snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanvasSnapshotData"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    put:
+      tags: [Canvas]
+      summary: Save the current canvas snapshot.
+      description: The frontend autosaves the full snapshot approximately every 2 seconds.
+      security:
+        - bearerAuth: []
+        - participantAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CanvasSnapshotData"
+      responses:
+        "204":
+          description: Snapshot saved. No response body.
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /ws/sessions/{session_id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionIdNamed"
+      - name: participant_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Participant identifier from the join result, or "owner" for the owner client.
+    get:
+      tags: [Realtime]
+      summary: WebSocket endpoint for canvas updates and presence.
+      description: >
+        Upgrade this HTTP request to a WebSocket connection. Clients send
+        WsInboundMessage JSON messages and receive WsOutboundMessage JSON
+        messages. Authentication should use either Authorization: Bearer for
+        signed-in users or X-Participant-Token for joined guests.
+      security:
+        - bearerAuth: []
+        - participantAuth: []
+      responses:
+        "101":
+          description: WebSocket upgrade accepted.
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token returned by /auth/sign-in or /auth/sign-up.
+    participantAuth:
+      type: apiKey
+      in: header
+      name: X-Participant-Token
+      description: Short-lived guest participant credential issued during join.
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionIdNamed:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+    GuestLinkId:
+      name: link_id
+      in: path
+      required: true
+      schema:
+        type: string
+    GuestToken:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 32
+  responses:
+    Error:
+      description: Error response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    SignInRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    SignUpRequest:
+      type: object
+      required: [email, password, display_name]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        display_name:
+          type: string
+          minLength: 1
+    AuthResult:
+      type: object
+      required: [user, token]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+    User:
+      type: object
+      required: [id, email, display_name, created_at]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    SessionState:
+      type: string
+      enum: [draft, live, ended, archived]
+    ParticipantRole:
+      type: string
+      enum: [owner, interviewer, candidate, observer]
+    InterviewSession:
+      type: object
+      required:
+        - id
+        - owner_user_id
+        - title
+        - prompt
+        - state
+        - candidate_editing_enabled
+        - scheduled_at
+        - started_at
+        - ended_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        owner_user_id:
+          type: string
+        title:
+          type: string
+        prompt:
+          type: string
+        state:
+          $ref: "#/components/schemas/SessionState"
+        candidate_editing_enabled:
+          type: boolean
+        scheduled_at:
+          type: [string, "null"]
+          format: date-time
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateSessionInput:
+      type: object
+      required: [title, prompt]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        prompt:
+          type: string
+        scheduled_at:
+          type: [string, "null"]
+          format: date-time
+    UpdateSessionInput:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+        prompt:
+          type: string
+        candidate_editing_enabled:
+          type: boolean
+    GuestLink:
+      type: object
+      required:
+        - id
+        - session_id
+        - token
+        - role_granted
+        - expires_at
+        - max_uses
+        - revoked_at
+        - created_at
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        token:
+          type: string
+          description: Raw token shown only once to the creator.
+        role_granted:
+          $ref: "#/components/schemas/ParticipantRole"
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        max_uses:
+          type: [integer, "null"]
+          minimum: 1
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    CreateGuestLinkRequest:
+      type: object
+      properties:
+        role:
+          $ref: "#/components/schemas/ParticipantRole"
+      additionalProperties: false
+    Participant:
+      type: object
+      required:
+        - id
+        - session_id
+        - user_id
+        - display_name
+        - role
+        - color
+        - joined_at
+        - left_at
+        - is_active
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        user_id:
+          type: [string, "null"]
+        display_name:
+          type: string
+        role:
+          $ref: "#/components/schemas/ParticipantRole"
+        color:
+          type: string
+          pattern: "^#[0-9a-fA-F]{6}$"
+        joined_at:
+          type: string
+          format: date-time
+        left_at:
+          type: [string, "null"]
+          format: date-time
+        is_active:
+          type: boolean
+    SessionDetails:
+      type: object
+      required: [session, participants, guest_links]
+      properties:
+        session:
+          $ref: "#/components/schemas/InterviewSession"
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Participant"
+        guest_links:
+          type: array
+          items:
+            $ref: "#/components/schemas/GuestLink"
+    ValidateTokenResult:
+      type: object
+      required: [session_id, session_title, role]
+      properties:
+        session_id:
+          type: string
+        session_title:
+          type: string
+        role:
+          $ref: "#/components/schemas/ParticipantRole"
+    JoinSessionRequest:
+      type: object
+      required: [display_name]
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+    JoinSessionResult:
+      type: object
+      required: [participant, session]
+      properties:
+        participant:
+          $ref: "#/components/schemas/Participant"
+        session:
+          $ref: "#/components/schemas/InterviewSession"
+        participant_token:
+          type: string
+          description: Optional credential for canvas HTTP and websocket access.
+    Point:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+    CanvasSnapshotData:
+      type: object
+      required: [items, item_order, schema_version]
+      properties:
+        items:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CanvasItem"
+        item_order:
+          type: array
+          items:
+            type: string
+        schema_version:
+          type: integer
+          minimum: 1
+    CanvasItem:
+      oneOf:
+        - $ref: "#/components/schemas/ShapeElement"
+        - $ref: "#/components/schemas/ConnectorElement"
+        - $ref: "#/components/schemas/FreehandStroke"
+        - $ref: "#/components/schemas/TextLabelElement"
+        - $ref: "#/components/schemas/StickyNoteElement"
+      discriminator:
+        propertyName: kind
+    ShapeElement:
+      type: object
+      required: [id, kind, shape_type, x, y, width, height, label, description, color, z]
+      properties:
+        id:
+          type: string
+        kind:
+          const: shape
+        shape_type:
+          type: string
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        label:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+        z:
+          type: number
+    ConnectorElement:
+      type: object
+      required:
+        - id
+        - kind
+        - from_id
+        - to_id
+        - from_point
+        - to_point
+        - label
+        - style
+        - arrow_start
+        - arrow_end
+        - dashed
+        - color
+        - z
+      properties:
+        id:
+          type: string
+        kind:
+          const: connector
+        from_id:
+          type: [string, "null"]
+        to_id:
+          type: [string, "null"]
+        from_point:
+          oneOf:
+            - $ref: "#/components/schemas/Point"
+            - type: "null"
+        to_point:
+          oneOf:
+            - $ref: "#/components/schemas/Point"
+            - type: "null"
+        label:
+          type: string
+        style:
+          type: string
+          enum: [straight, elbow, curved]
+        arrow_start:
+          type: boolean
+        arrow_end:
+          type: boolean
+        dashed:
+          type: boolean
+        color:
+          type: string
+        z:
+          type: number
+    FreehandStroke:
+      type: object
+      required: [id, kind, points, color, width, opacity, z]
+      properties:
+        id:
+          type: string
+        kind:
+          const: freehand
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/Point"
+        color:
+          type: string
+        width:
+          type: number
+        opacity:
+          type: number
+          minimum: 0
+          maximum: 1
+        z:
+          type: number
+    TextLabelElement:
+      type: object
+      required: [id, kind, x, y, text, font_size, color, z]
+      properties:
+        id:
+          type: string
+        kind:
+          const: text
+        x:
+          type: number
+        y:
+          type: number
+        text:
+          type: string
+        font_size:
+          type: number
+        color:
+          type: string
+        z:
+          type: number
+    StickyNoteElement:
+      type: object
+      required: [id, kind, x, y, width, height, text, color, z]
+      properties:
+        id:
+          type: string
+        kind:
+          const: sticky
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        text:
+          type: string
+        color:
+          type: string
+        z:
+          type: number
+    CanvasOperation:
+      oneOf:
+        - $ref: "#/components/schemas/AddOperation"
+        - $ref: "#/components/schemas/UpdateOperation"
+        - $ref: "#/components/schemas/DeleteOperation"
+        - $ref: "#/components/schemas/MoveOperation"
+        - $ref: "#/components/schemas/ResizeOperation"
+        - $ref: "#/components/schemas/RelabelOperation"
+        - $ref: "#/components/schemas/ClearOperation"
+      discriminator:
+        propertyName: op
+    AddOperation:
+      type: object
+      required: [op, item]
+      properties:
+        op:
+          const: add
+        item:
+          $ref: "#/components/schemas/CanvasItem"
+    UpdateOperation:
+      type: object
+      required: [op, item]
+      properties:
+        op:
+          const: update
+        item:
+          $ref: "#/components/schemas/CanvasItem"
+    DeleteOperation:
+      type: object
+      required: [op, id]
+      properties:
+        op:
+          const: delete
+        id:
+          type: string
+    MoveOperation:
+      type: object
+      required: [op, ids, dx, dy]
+      properties:
+        op:
+          const: move
+        ids:
+          type: array
+          items:
+            type: string
+        dx:
+          type: number
+        dy:
+          type: number
+    ResizeOperation:
+      type: object
+      required: [op, id, width, height]
+      properties:
+        op:
+          const: resize
+        id:
+          type: string
+        width:
+          type: number
+        height:
+          type: number
+    RelabelOperation:
+      type: object
+      required: [op, id, label]
+      properties:
+        op:
+          const: relabel
+        id:
+          type: string
+        label:
+          type: string
+    ClearOperation:
+      type: object
+      required: [op]
+      properties:
+        op:
+          const: clear
+    PresenceState:
+      type: object
+      required: [participant_id, display_name, color, cursor, selected_ids]
+      properties:
+        participant_id:
+          type: string
+        display_name:
+          type: string
+        color:
+          type: string
+        cursor:
+          oneOf:
+            - $ref: "#/components/schemas/Point"
+            - type: "null"
+        selected_ids:
+          type: array
+          items:
+            type: string
+    WsInboundMessage:
+      oneOf:
+        - $ref: "#/components/schemas/WsJoinRoom"
+        - $ref: "#/components/schemas/WsDocumentUpdateIn"
+        - $ref: "#/components/schemas/WsPresenceUpdateIn"
+        - $ref: "#/components/schemas/WsPing"
+      discriminator:
+        propertyName: type
+    WsOutboundMessage:
+      oneOf:
+        - $ref: "#/components/schemas/WsRoomJoined"
+        - $ref: "#/components/schemas/WsDocumentUpdateOut"
+        - $ref: "#/components/schemas/WsPresenceSnapshot"
+        - $ref: "#/components/schemas/WsPresenceUpdateOut"
+        - $ref: "#/components/schemas/WsPermissionChanged"
+        - $ref: "#/components/schemas/WsSessionEnded"
+        - $ref: "#/components/schemas/WsParticipantJoined"
+        - $ref: "#/components/schemas/WsParticipantLeft"
+        - $ref: "#/components/schemas/WsError"
+        - $ref: "#/components/schemas/WsPong"
+      discriminator:
+        propertyName: type
+    WsJoinRoom:
+      type: object
+      required: [type, session_id]
+      properties:
+        type:
+          const: join_room
+        session_id:
+          type: string
+    WsDocumentUpdateIn:
+      type: object
+      required: [type, session_id, operation]
+      properties:
+        type:
+          const: document_update
+        session_id:
+          type: string
+        operation:
+          $ref: "#/components/schemas/CanvasOperation"
+    WsPresenceUpdateIn:
+      type: object
+      required: [type, session_id, cursor, selected_ids]
+      properties:
+        type:
+          const: presence_update
+        session_id:
+          type: string
+        cursor:
+          oneOf:
+            - $ref: "#/components/schemas/Point"
+            - type: "null"
+        selected_ids:
+          type: array
+          items:
+            type: string
+    WsPing:
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: ping
+    WsRoomJoined:
+      type: object
+      required: [type, session_id, snapshot, participants]
+      properties:
+        type:
+          const: room_joined
+        session_id:
+          type: string
+        snapshot:
+          $ref: "#/components/schemas/CanvasSnapshotData"
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/PresenceState"
+    WsDocumentUpdateOut:
+      allOf:
+        - $ref: "#/components/schemas/WsDocumentUpdateIn"
+    WsPresenceSnapshot:
+      type: object
+      required: [type, session_id, participants]
+      properties:
+        type:
+          const: presence_snapshot
+        session_id:
+          type: string
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/PresenceState"
+    WsPresenceUpdateOut:
+      type: object
+      required: [type, session_id, participant_id, cursor, selected_ids]
+      properties:
+        type:
+          const: presence_update
+        session_id:
+          type: string
+        participant_id:
+          type: string
+        cursor:
+          oneOf:
+            - $ref: "#/components/schemas/Point"
+            - type: "null"
+        selected_ids:
+          type: array
+          items:
+            type: string
+    WsPermissionChanged:
+      type: object
+      required: [type, session_id, candidate_editing_enabled]
+      properties:
+        type:
+          const: permission_changed
+        session_id:
+          type: string
+        candidate_editing_enabled:
+          type: boolean
+    WsSessionEnded:
+      type: object
+      required: [type, session_id]
+      properties:
+        type:
+          const: session_ended
+        session_id:
+          type: string
+    WsParticipantJoined:
+      type: object
+      required: [type, session_id, participant]
+      properties:
+        type:
+          const: participant_joined
+        session_id:
+          type: string
+        participant:
+          $ref: "#/components/schemas/PresenceState"
+    WsParticipantLeft:
+      type: object
+      required: [type, session_id, participant_id]
+      properties:
+        type:
+          const: participant_left
+        session_id:
+          type: string
+        participant_id:
+          type: string
+    WsError:
+      type: object
+      required: [type, code, message]
+      properties:
+        type:
+          const: error
+        code:
+          type: string
+        message:
+          type: string
+    WsPong:
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: pong
