@@ -1,7 +1,8 @@
-.PHONY: help backend-sync backend-run backend-test frontend-install frontend-run frontend-test frontend-build test
+.PHONY: help run backend-sync backend-run backend-test frontend-install frontend-run frontend-test frontend-build test
 
 help:
 	@echo "Available targets:"
+	@echo "  make run               Run the FastAPI backend on http://127.0.0.1:8000"
 	@echo "  make backend-sync      Install/sync backend dependencies with uv"
 	@echo "  make backend-run       Run the FastAPI backend on http://127.0.0.1:8000"
 	@echo "  make backend-test      Run backend tests"
@@ -10,6 +11,8 @@ help:
 	@echo "  make frontend-test     Run frontend tests"
 	@echo "  make frontend-build    Build the frontend"
 	@echo "  make test              Run backend and frontend tests"
+
+run: backend-run
 
 backend-sync:
 	cd backend && uv sync
