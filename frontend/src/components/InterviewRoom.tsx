@@ -53,6 +53,21 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   }, [sessionId, participantId]);
 
   useEffect(() => {
+    const interval = setInterval(async () => {
+      if (pendingSnapshotRef.current) return;
+      try {
+        const svc = getService();
+        const serverSnapshot = await svc.getCanvasSnapshot(sessionId);
+        setSnapshot(serverSnapshot);
+      } catch {
+        // The websocket reconnect loop owns visible connection status.
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (session?.state === 'live' && session.started_at) {
       const start = new Date(session.started_at).getTime();
       const interval = setInterval(() => {
@@ -111,7 +126,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
         await svc.saveCanvasSnapshot(sessionId, pendingSnapshotRef.current);
         pendingSnapshotRef.current = null;
       }
-    }, 2000);
+    }, 500);
   };
 
   const handleOperation = (op: CanvasOperation) => {

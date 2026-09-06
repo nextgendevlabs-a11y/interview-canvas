@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from pydantic import TypeAdapter, ValidationError
 
 from backend.models import PresenceState, WsInboundMessage, WsRoomJoined
@@ -24,10 +25,19 @@ class ConnectionManager:
         self.rooms[session_id] = [socket for socket in sockets if socket is not websocket]
 
     async def broadcast(self, session_id: str, message: dict[str, Any], exclude: WebSocket | None = None) -> None:
+        disconnected: list[WebSocket] = []
         for websocket in list(self.rooms.get(session_id, [])):
             if websocket is exclude:
                 continue
-            await websocket.send_json(message)
+            if websocket.client_state != WebSocketState.CONNECTED:
+                disconnected.append(websocket)
+                continue
+            try:
+                await websocket.send_json(message)
+            except RuntimeError:
+                disconnected.append(websocket)
+        for websocket in disconnected:
+            self.disconnect(session_id, websocket)
 
     def broadcast_json(self, session_id: str, message: dict[str, Any]) -> None:
         # Used by synchronous HTTP routes. Tests use TestClient, where this is
