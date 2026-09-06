@@ -1,0 +1,845 @@
+import { useState, useRef, useCallback, useEffect } from 'react';
+import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement } from '@/services/types';
+import { applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo, type CanvasHistory } from '@/canvas/reducer';
+import { PALETTE_CATEGORIES, PALETTE, getPaletteComponent, PARTICIPANT_COLORS } from '@/canvas/palette';
+import { hitTest, hitTestRect, computeBounds, getItemBounds, getConnectorAnchorPoint, getShapeCenter, generateId } from '@/canvas/geometry';
+import { getService } from '@/services';
+
+export type Tool = 'select' | 'pan' | 'pen' | 'highlighter' | 'eraser' | 'text' | 'sticky' | 'connector';
+
+interface CanvasProps {
+  snapshot: CanvasSnapshotData;
+  onSnapshotChange: (snapshot: CanvasSnapshotData) => void;
+  participantColor: string;
+  participantName: string;
+  canEdit: boolean;
+  onOperation: (op: CanvasOperation) => void;
+}
+
+const GRID_SIZE = 20;
+
+export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, onOperation }: CanvasProps) {
+  const [tool, setTool] = useState<Tool>('select');
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [freehandPoints, setFreehandPoints] = useState<{ x: number; y: number }[]>([]);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectRect, setSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [connectorStart, setConnectorStart] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string | null>(null);
+  const [editingTextValue, setEditingTextValue] = useState('');
+  const [showPalette, setShowPalette] = useState(false);
+  const [history, setHistory] = useState<CanvasHistory>(createHistory());
+  const svgRef = useRef<SVGSVGElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const screenToWorld = useCallback((clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (clientX - rect.left - pan.x) / zoom,
+      y: (clientY - rect.top - pan.y) / zoom,
+    };
+  }, [pan, zoom]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!canEdit && tool !== 'pan') return;
+    const world = screenToWorld(e.clientX, e.clientY);
+
+    if (tool === 'pan' || e.button === 1 || (e.button === 0 && e.altKey)) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      return;
+    }
+
+    if (tool === 'pen' || tool === 'highlighter') {
+      setIsDrawing(true);
+      setFreehandPoints([world]);
+      return;
+    }
+
+    if (tool === 'eraser') {
+      const hitId = hitTest(snapshot.items, snapshot.item_order, world);
+      if (hitId) {
+        const op: CanvasOperation = { op: 'delete', id: hitId };
+        applyAndBroadcast(op);
+      }
+      return;
+    }
+
+    if (tool === 'text') {
+      const textItem = createText(world.x, world.y, 'Text');
+      const op: CanvasOperation = { op: 'add', item: textItem };
+      applyAndBroadcast(op);
+      setEditingText(textItem.id);
+      setEditingTextValue('Text');
+      setTool('select');
+      return;
+    }
+
+    if (tool === 'sticky') {
+      const sticky = createSticky(world.x, world.y, 'Note');
+      const op: CanvasOperation = { op: 'add', item: sticky };
+      applyAndBroadcast(op);
+      setEditingText(sticky.id);
+      setEditingTextValue('Note');
+      setTool('select');
+      return;
+    }
+
+    if (tool === 'connector') {
+      const hitId = hitTest(snapshot.items, snapshot.item_order, world);
+      if (hitId && snapshot.items[hitId].kind === 'shape') {
+        if (!connectorStart) {
+          setConnectorStart(hitId);
+        } else {
+          const conn = createConnector(connectorStart, hitId, null, null);
+          const op: CanvasOperation = { op: 'add', item: conn };
+          applyAndBroadcast(op);
+          setConnectorStart(null);
+        }
+      } else {
+        if (connectorStart) {
+          const fromShape = snapshot.items[connectorStart];
+          if (fromShape && fromShape.kind === 'shape') {
+            const anchor = getConnectorAnchorPoint(fromShape as ShapeElement, world);
+            const conn = createConnector(connectorStart, null, anchor, world);
+            const op: CanvasOperation = { op: 'add', item: conn };
+            applyAndBroadcast(op);
+            setConnectorStart(null);
+          }
+        }
+      }
+      return;
+    }
+
+    // Select tool
+    const hitId = hitTest(snapshot.items, snapshot.item_order, world);
+    if (hitId) {
+      if (e.shiftKey) {
+        setSelectedIds((prev) => prev.includes(hitId) ? prev.filter(id => id !== hitId) : [...prev, hitId]);
+      } else {
+        setSelectedIds([hitId]);
+        const item = snapshot.items[hitId];
+        const bounds = getItemBounds(item);
+        setIsDragging(true);
+        setDragStart(world);
+        setDragOffset({ x: world.x - bounds.x, y: world.y - bounds.y });
+      }
+    } else {
+      if (!e.shiftKey) setSelectedIds([]);
+      setIsSelecting(true);
+      setSelectRect({ x: world.x, y: world.y, w: 0, h: 0 });
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+      return;
+    }
+
+    const world = screenToWorld(e.clientX, e.clientY);
+
+    if (isDrawing) {
+      setFreehandPoints((prev) => [...prev, world]);
+      return;
+    }
+
+    if (isSelecting && selectRect) {
+      setSelectRect({
+        x: Math.min(selectRect.x, world.x),
+        y: Math.min(selectRect.y, world.y),
+        w: Math.abs(world.x - selectRect.x),
+        h: Math.abs(world.y - selectRect.y),
+      });
+      return;
+    }
+
+    if (isDragging && selectedIds.length > 0) {
+      // Visual feedback only - actual move on mouse up
+      return;
+    }
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (isPanning) {
+      setIsPanning(false);
+      return;
+    }
+
+    if (isDrawing) {
+      if (freehandPoints.length > 1) {
+        const color = tool === 'highlighter' ? '#fbbf24' : '#1e293b';
+        const width = tool === 'highlighter' ? 12 : 2;
+        const opacity = tool === 'highlighter' ? 0.4 : 1;
+        const stroke = createFreehandStroke(freehandPoints, color, width, opacity);
+        const op: CanvasOperation = { op: 'add', item: stroke };
+        applyAndBroadcast(op);
+      }
+      setIsDrawing(false);
+      setFreehandPoints([]);
+      return;
+    }
+
+    if (isSelecting && selectRect) {
+      const hits = hitTestRect(snapshot.items, snapshot.item_order, {
+        x: selectRect.x,
+        y: selectRect.y,
+        width: selectRect.w,
+        height: selectRect.h,
+      });
+      if (hits.length > 0) {
+        setSelectedIds(hits);
+      }
+      setIsSelecting(false);
+      setSelectRect(null);
+      return;
+    }
+
+    if (isDragging && selectedIds.length > 0) {
+      const world = screenToWorld(e.clientX, e.clientY);
+      const newX = world.x - dragOffset.x;
+      const newY = world.y - dragOffset.y;
+      const firstItem = snapshot.items[selectedIds[0]];
+      if (firstItem) {
+        const bounds = getItemBounds(firstItem);
+        const dx = newX - bounds.x;
+        const dy = newY - bounds.y;
+        if (dx !== 0 || dy !== 0) {
+          const op: CanvasOperation = { op: 'move', ids: selectedIds, dx, dy };
+          applyAndBroadcast(op);
+        }
+      }
+      setIsDragging(false);
+    }
+  };
+
+  const applyAndBroadcast = (op: CanvasOperation) => {
+    setHistory((h) => pushHistory(h, snapshot, 'before op'));
+    const next = applyOperation(snapshot, op);
+    onSnapshotChange(next);
+    onOperation(op);
+  };
+
+  const handleDelete = () => {
+    if (selectedIds.length === 0) return;
+    for (const id of selectedIds) {
+      const op: CanvasOperation = { op: 'delete', id };
+      setHistory((h) => pushHistory(h, snapshot, 'before delete'));
+      const next = applyOperation(snapshot, op);
+      onSnapshotChange(next);
+      onOperation(op);
+    }
+    setSelectedIds([]);
+  };
+
+  const handleUndo = () => {
+    const result = undo(history, snapshot);
+    setHistory(result.history);
+    onSnapshotChange(result.snapshot);
+  };
+
+  const handleRedo = () => {
+    const result = redo(history, snapshot);
+    setHistory(result.history);
+    onSnapshotChange(result.snapshot);
+  };
+
+  const handleZoomIn = () => setZoom((z) => Math.min(z * 1.2, 5));
+  const handleZoomOut = () => setZoom((z) => Math.max(z / 1.2, 0.1));
+  const handleZoomReset = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
+
+  const handleZoomToFit = () => {
+    if (snapshot.item_order.length === 0) {
+      handleZoomReset();
+      return;
+    }
+    const bounds = computeBounds(snapshot.item_order, snapshot.items);
+    if (!bounds) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const padding = 80;
+    const scaleX = (rect.width - padding * 2) / bounds.width;
+    const scaleY = (rect.height - padding * 2) / bounds.height;
+    const newZoom = Math.min(scaleX, scaleY, 2);
+    setZoom(newZoom);
+    setPan({
+      x: rect.width / 2 - (bounds.x + bounds.width / 2) * newZoom,
+      y: rect.height / 2 - (bounds.y + bounds.height / 2) * newZoom,
+    });
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const delta = -e.deltaY * 0.001;
+      setZoom((z) => Math.max(0.1, Math.min(5, z * (1 + delta))));
+    } else {
+      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+    }
+  };
+
+  const addComponent = (componentType: string) => {
+    const comp = getPaletteComponent(componentType);
+    if (!comp) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    const x = rect ? (rect.width / 2 - pan.x) / zoom - comp.default_width / 2 : 0;
+    const y = rect ? (rect.height / 2 - pan.y) / zoom - comp.default_height / 2 : 0;
+    const shape = createShape(componentType, x, y, comp.default_width, comp.default_height, comp.label, comp.color);
+    const op: CanvasOperation = { op: 'add', item: shape };
+    applyAndBroadcast(op);
+    setSelectedIds([shape.id]);
+    setShowPalette(false);
+    setTool('select');
+  };
+
+  const handleLabelEdit = (id: string, newLabel: string) => {
+    const op: CanvasOperation = { op: 'relabel', id, label: newLabel };
+    applyAndBroadcast(op);
+    setEditingText(null);
+  };
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (editingText) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        handleDelete();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.key === 'v') setTool('select');
+      else if (e.key === 'h') setTool('pan');
+      else if (e.key === 'p') setTool('pen');
+      else if (e.key === 'e') setTool('eraser');
+      else if (e.key === 't') setTool('text');
+      else if (e.key === 'n') setTool('sticky');
+      else if (e.key === 'c') setTool('connector');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedIds, snapshot, history, editingText]);
+
+  const tools: { id: Tool; label: string; icon: string }[] = [
+    { id: 'select', label: 'Select (V)', icon: 'mouse-pointer' },
+    { id: 'pan', label: 'Pan (H)', icon: 'hand' },
+    { id: 'pen', label: 'Pen (P)', icon: 'pen' },
+    { id: 'highlighter', label: 'Highlighter', icon: 'highlighter' },
+    { id: 'eraser', label: 'Eraser (E)', icon: 'eraser' },
+    { id: 'text', label: 'Text (T)', icon: 'text' },
+    { id: 'sticky', label: 'Sticky Note (N)', icon: 'sticky-note' },
+    { id: 'connector', label: 'Connector (C)', icon: 'connector' },
+  ];
+
+  return (
+    <div className="relative w-full h-full overflow-hidden bg-slate-50" style={{ cursor: tool === 'pan' ? 'grab' : tool === 'pen' ? 'crosshair' : 'default' }}>
+      {/* Left toolbar */}
+      <div className="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 bg-white rounded-xl shadow-lg border border-slate-200 p-2">
+        {tools.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTool(t.id)}
+            title={t.label}
+            className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+              tool === t.id ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <ToolIcon name={t.id} />
+          </button>
+        ))}
+        <div className="h-px bg-slate-200 my-1" />
+        <button
+          onClick={() => setShowPalette(!showPalette)}
+          title="Component Library"
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            showPalette ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <ToolIcon name="palette" />
+        </button>
+      </div>
+
+      {/* Component palette */}
+      {showPalette && (
+        <div className="absolute left-16 top-1/2 -translate-y-1/2 z-20 w-72 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-xl border border-slate-200 p-3">
+          <h3 className="text-sm font-semibold text-slate-700 mb-2">Components</h3>
+          {PALETTE_CATEGORIES.map((cat) => (
+            <div key={cat} className="mb-3">
+              <div className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">{cat}</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {PALETTE.filter((c) => c.category === cat).map((comp) => (
+                  <button
+                    key={comp.type}
+                    onClick={() => addComponent(comp.type)}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-slate-100 text-left transition-colors"
+                  >
+                    <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: comp.color }} />
+                    <span className="text-xs text-slate-600 truncate">{comp.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* SVG Canvas */}
+      <svg
+        ref={svgRef}
+        className="w-full h-full"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <defs>
+          <pattern id="grid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
+            <circle cx={GRID_SIZE / 2} cy={GRID_SIZE / 2} r={0.5} fill="#cbd5e1" />
+          </pattern>
+          <marker id="arrowhead" markerWidth={10} markerHeight={7} refX={9} refY={3.5} orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#475569" />
+          </marker>
+          <marker id="arrowhead-start" markerWidth={10} markerHeight={7} refX={1} refY={3.5} orient="auto">
+            <polygon points="10 0, 0 3.5, 10 7" fill="#475569" />
+          </marker>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)" />
+        <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+          {/* Render items */}
+          {snapshot.item_order.map((id) => {
+            const item = snapshot.items[id];
+            if (!item) return null;
+            const isSelected = selectedIds.includes(id);
+            return (
+              <CanvasItemRenderer
+                key={id}
+                item={item}
+                selected={isSelected}
+                allItems={snapshot.items}
+                onLabelEdit={handleLabelEdit}
+                editing={editingText === id}
+                editingValue={editingTextValue}
+                onEditingValueChange={setEditingTextValue}
+                onEditingBlur={() => {
+                  if (editingText) handleLabelEdit(editingText, editingTextValue);
+                }}
+              />
+            );
+          })}
+
+          {/* Render freehand in progress */}
+          {isDrawing && freehandPoints.length > 0 && (
+            <path
+              d={freehandPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')}
+              fill="none"
+              stroke={tool === 'highlighter' ? '#fbbf24' : '#1e293b'}
+              strokeWidth={tool === 'highlighter' ? 12 : 2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={tool === 'highlighter' ? 0.4 : 1}
+            />
+          )}
+
+          {/* Render selection rectangle */}
+          {isSelecting && selectRect && (
+            <rect
+              x={selectRect.x}
+              y={selectRect.y}
+              width={selectRect.w}
+              height={selectRect.h}
+              fill="rgba(59, 130, 246, 0.1)"
+              stroke="#3b82f6"
+              strokeWidth={1}
+              strokeDasharray="4 4"
+            />
+          )}
+
+          {/* Render connector preview */}
+          {connectorStart && snapshot.items[connectorStart]?.kind === 'shape' && (
+            (() => {
+              const shape = snapshot.items[connectorStart] as ShapeElement;
+              const center = getShapeCenter(shape);
+              return <circle cx={center.x} cy={center.y} r={6} fill={participantColor} opacity={0.5} />;
+            })()
+          )}
+        </g>
+      </svg>
+
+      {/* Bottom controls */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-white rounded-xl shadow-lg border border-slate-200 px-2 py-1.5">
+        <button onClick={handleZoomOut} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors" title="Zoom out">
+          <ToolIcon name="zoom-out" />
+        </button>
+        <span className="text-sm text-slate-600 min-w-[3rem] text-center">{Math.round(zoom * 100)}%</span>
+        <button onClick={handleZoomIn} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors" title="Zoom in">
+          <ToolIcon name="zoom-in" />
+        </button>
+        <div className="w-px h-6 bg-slate-200 mx-1" />
+        <button onClick={handleZoomToFit} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors" title="Zoom to fit">
+          <ToolIcon name="zoom-fit" />
+        </button>
+        <button onClick={handleZoomReset} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors" title="Reset view">
+          <ToolIcon name="zoom-reset" />
+        </button>
+        <div className="w-px h-6 bg-slate-200 mx-1" />
+        <button onClick={handleUndo} disabled={history.past.length === 0} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Undo (Ctrl+Z)">
+          <ToolIcon name="undo" />
+        </button>
+        <button onClick={handleRedo} disabled={history.future.length === 0} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Redo (Ctrl+Y)">
+          <ToolIcon name="redo" />
+        </button>
+      </div>
+
+      {/* Edit lock indicator */}
+      {!canEdit && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-amber-50 border border-amber-200 text-amber-700 text-sm px-4 py-1.5 rounded-lg shadow-sm">
+          Editing is locked by the interviewer
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CanvasItemRenderer({
+  item,
+  selected,
+  allItems,
+  onLabelEdit,
+  editing,
+  editingValue,
+  onEditingValueChange,
+  onEditingBlur,
+}: {
+  item: CanvasItem;
+  selected: boolean;
+  allItems: Record<string, CanvasItem>;
+  onLabelEdit: (id: string, label: string) => void;
+  editing: boolean;
+  editingValue: string;
+  onEditingValueChange: (v: string) => void;
+  onEditingBlur: () => void;
+}) {
+  const strokeColor = selected ? '#3b82f6' : 'transparent';
+  const strokeWidth = selected ? 2 : 0;
+
+  if (item.kind === 'shape') {
+    const isRounded = item.shape_type === 'rounded' || item.shape_type === 'function';
+    return (
+      <g>
+        {isRounded ? (
+          <rect
+            x={item.x}
+            y={item.y}
+            width={item.width}
+            height={item.height}
+            rx={12}
+            ry={12}
+            fill={item.color}
+            fillOpacity={0.12}
+            stroke={item.color}
+            strokeWidth={2}
+          />
+        ) : (
+          <rect
+            x={item.x}
+            y={item.y}
+            width={item.width}
+            height={item.height}
+            rx={4}
+            ry={4}
+            fill={item.color}
+            fillOpacity={0.12}
+            stroke={item.color}
+            strokeWidth={2}
+          />
+        )}
+        {selected && (
+          <rect
+            x={item.x - 4}
+            y={item.y - 4}
+            width={item.width + 8}
+            height={item.height + 8}
+            rx={6}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeDasharray="4 2"
+          />
+        )}
+        {editing ? (
+          <foreignObject x={item.x + 8} y={item.y + item.height / 2 - 12} width={item.width - 16} height={24}>
+            <input
+              autoFocus
+              value={editingValue}
+              onChange={(e) => onEditingValueChange(e.target.value)}
+              onBlur={onEditingBlur}
+              onKeyDown={(e) => { if (e.key === 'Enter') onEditingBlur(); }}
+              className="w-full text-sm text-center bg-white border border-blue-400 rounded px-1 outline-none"
+              style={{ color: item.color }}
+            />
+          </foreignObject>
+        ) : (
+          <text
+            x={item.x + item.width / 2}
+            y={item.y + item.height / 2 + 5}
+            textAnchor="middle"
+            className="text-sm font-medium pointer-events-none select-none"
+            fill={item.color}
+            onDoubleClick={() => { onEditingValueChange(item.label); }}
+          >
+            {item.label}
+          </text>
+        )}
+      </g>
+    );
+  }
+
+  if (item.kind === 'sticky') {
+    return (
+      <g>
+        <rect
+          x={item.x}
+          y={item.y}
+          width={item.width}
+          height={item.height}
+          rx={4}
+          fill={item.color}
+          fillOpacity={0.85}
+          stroke={item.color}
+          strokeWidth={1}
+          transform="rotate(-1, ${item.x + item.width/2}, ${item.y + item.height/2})"
+        />
+        {selected && (
+          <rect
+            x={item.x - 4}
+            y={item.y - 4}
+            width={item.width + 8}
+            height={item.height + 8}
+            rx={6}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeDasharray="4 2"
+          />
+        )}
+        {editing ? (
+          <foreignObject x={item.x + 8} y={item.y + 8} width={item.width - 16} height={item.height - 16}>
+            <textarea
+              autoFocus
+              value={editingValue}
+              onChange={(e) => onEditingValueChange(e.target.value)}
+              onBlur={onEditingBlur}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) onEditingBlur(); }}
+              className="w-full h-full text-sm bg-transparent outline-none resize-none"
+            />
+          </foreignObject>
+        ) : (
+          <text
+            x={item.x + 10}
+            y={item.y + 20}
+            className="text-sm pointer-events-none select-none"
+            fill="#1e293b"
+            onDoubleClick={() => { onEditingValueChange(item.text); }}
+          >
+            {item.text}
+          </text>
+        )}
+      </g>
+    );
+  }
+
+  if (item.kind === 'text') {
+    return (
+      <g>
+        {editing ? (
+          <foreignObject x={item.x} y={item.y - 4} width={250} height={item.font_size + 12}>
+            <input
+              autoFocus
+              value={editingValue}
+              onChange={(e) => onEditingValueChange(e.target.value)}
+              onBlur={onEditingBlur}
+              onKeyDown={(e) => { if (e.key === 'Enter') onEditingBlur(); }}
+              className="text-sm bg-white border border-blue-400 rounded px-1 outline-none"
+              style={{ color: item.color, fontSize: item.font_size }}
+            />
+          </foreignObject>
+        ) : (
+          <text
+            x={item.x}
+            y={item.y + item.font_size}
+            className="text-sm font-medium pointer-events-none select-none"
+            fill={item.color}
+            style={{ fontSize: item.font_size }}
+            onDoubleClick={() => { onEditingValueChange(item.text); }}
+          >
+            {item.text}
+          </text>
+        )}
+        {selected && (
+          <rect
+            x={item.x - 4}
+            y={item.y - 4}
+            width={258}
+            height={item.font_size + 12}
+            rx={4}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeDasharray="4 2"
+          />
+        )}
+      </g>
+    );
+  }
+
+  if (item.kind === 'connector') {
+    let from = item.from_point;
+    let to = item.to_point;
+    if (item.from_id && allItems[item.from_id]?.kind === 'shape') {
+      const fromShape = allItems[item.from_id] as ShapeElement;
+      const target = to ?? getShapeCenter(fromShape);
+      from = getConnectorAnchorPoint(fromShape, target);
+    }
+    if (item.to_id && allItems[item.to_id]?.kind === 'shape') {
+      const toShape = allItems[item.to_id] as ShapeElement;
+      const source = from ?? getShapeCenter(toShape);
+      to = getConnectorAnchorPoint(toShape, source);
+    }
+    if (!from || !to) return null;
+
+    let path: string;
+    if (item.style === 'straight') {
+      path = `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+    } else if (item.style === 'elbow') {
+      const midX = (from.x + to.x) / 2;
+      path = `M ${from.x} ${from.y} L ${midX} ${from.y} L ${midX} ${to.y} L ${to.x} ${to.y}`;
+    } else {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const dist = Math.hypot(dx, dy);
+      const curve = Math.min(dist * 0.3, 80);
+      const cx1 = from.x + dx * 0.3;
+      const cy1 = from.y;
+      const cx2 = to.x - dx * 0.3;
+      const cy2 = to.y;
+      path = `M ${from.x} ${from.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${to.x} ${to.y}`;
+    }
+
+    return (
+      <g>
+        <path
+          d={path}
+          fill="none"
+          stroke={item.color}
+          strokeWidth={2}
+          strokeDasharray={item.dashed ? '6 4' : undefined}
+          markerStart={item.arrow_start ? 'url(#arrowhead-start)' : undefined}
+          markerEnd={item.arrow_end ? 'url(#arrowhead)' : undefined}
+        />
+        {item.label && (
+          <text
+            x={(from.x + to.x) / 2}
+            y={(from.y + to.y) / 2 - 6}
+            textAnchor="middle"
+            className="text-xs pointer-events-none select-none"
+            fill="#475569"
+          >
+            {item.label}
+          </text>
+        )}
+        {selected && (
+          <path
+            d={path}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={4}
+            strokeDasharray="4 2"
+            opacity={0.5}
+          />
+        )}
+      </g>
+    );
+  }
+
+  if (item.kind === 'freehand') {
+    if (item.points.length === 0) return null;
+    const d = item.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+    return (
+      <g>
+        <path
+          d={d}
+          fill="none"
+          stroke={item.color}
+          strokeWidth={item.width}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity={item.opacity}
+        />
+        {selected && (
+          <path
+            d={d}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={item.width + 4}
+            strokeDasharray="4 2"
+            opacity={0.3}
+          />
+        )}
+      </g>
+    );
+  }
+
+  return null;
+}
+
+function ToolIcon({ name }: { name: string }) {
+  const icons: Record<string, string> = {
+    select: 'M2 2 L8 18 L10 12 L16 10 Z',
+    pan: 'M9 11 V3 A2 2 0 0 1 13 3 V11 M9 11 V9 A2 2 0 0 1 13 9 V11 M9 11 V7 A2 2 0 0 1 13 7 V11 M9 11 H17 A2 2 0 0 1 19 13 V11 H9',
+    pen: 'M3 17 L14 6 L18 10 L7 21 L3 21 Z',
+    highlighter: 'M3 18 L14 7 L17 10 L6 21 L3 21 Z M14 3 L17 6',
+    eraser: 'M5 15 L12 8 L19 15 L14 20 L5 20 Z',
+    text: 'M4 4 H20 M12 4 V20',
+    sticky: 'M4 4 H16 L20 8 V20 H4 Z',
+    connector: 'M4 12 H20 M16 8 L20 12 L16 16',
+    palette: 'M12 4 A8 8 0 1 0 12 20 C10 20 10 16 12 16 C14 16 16 14 16 12 C16 10 14 4 12 4 Z',
+    'zoom-in': 'M11 4 A7 7 0 1 1 11 18 A7 7 0 1 1 11 4 M11 8 V14 M8 11 H14',
+    'zoom-out': 'M11 4 A7 7 0 1 1 11 18 A7 7 0 1 1 11 4 M8 11 H14',
+    'zoom-fit': 'M4 8 V4 H8 M16 4 H20 V8 M20 16 V20 H16 M8 20 H4 V16',
+    'zoom-reset': 'M12 4 A8 8 0 1 1 12 20 A8 8 0 1 1 12 4 M8 12 H16 M12 8 V16',
+    undo: 'M9 7 L4 12 L9 17 M4 12 H16 A4 4 0 0 1 20 16 V18',
+    redo: 'M15 7 L20 12 L15 17 M20 12 H8 A4 4 0 0 0 4 16 V18',
+  };
+  return (
+    <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      {name === 'select' && <path d="M2 2 L8 18 L10 12 L16 10 Z" fill="currentColor" />}
+      {name === 'pan' && <><path d="M9 11 V3 A2 2 0 0 1 13 3 V11" /><path d="M9 11 V9 A2 2 0 0 1 13 9 V11" /><path d="M9 11 V7 A2 2 0 0 1 13 7 V11" /><path d="M9 11 H17 A2 2 0 0 1 19 13 V11" /></>}
+      {name === 'pen' && <path d="M3 17 L14 6 L18 10 L7 21 L3 21 Z" />}
+      {name === 'highlighter' && <><path d="M3 18 L14 7 L17 10 L6 21 L3 21 Z" /><path d="M14 3 L17 6" /></>}
+      {name === 'eraser' && <path d="M5 15 L12 8 L19 15 L14 20 L5 20 Z" />}
+      {name === 'text' && <><path d="M4 4 H20" /><path d="M12 4 V20" /></>}
+      {name === 'sticky' && <path d="M4 4 H16 L20 8 V20 H4 Z" />}
+      {name === 'connector' && <><path d="M4 12 H20" /><path d="M16 8 L20 12 L16 16" /></>}
+      {name === 'palette' && <path d="M12 4 A8 8 0 1 0 12 20 C10 20 10 16 12 16 C14 16 16 14 16 12 C16 10 14 4 12 4 Z" />}
+      {name === 'zoom-in' && <><circle cx={11} cy={11} r={7} /><path d="M11 8 V14 M8 11 H14" /><path d="M16 16 L20 20" /></>}
+      {name === 'zoom-out' && <><circle cx={11} cy={11} r={7} /><path d="M8 11 H14" /><path d="M16 16 L20 20" /></>}
+      {name === 'zoom-fit' && <><path d="M4 8 V4 H8" /><path d="M16 4 H20 V8" /><path d="M20 16 V20 H16" /><path d="M8 20 H4 V16" /></>}
+      {name === 'zoom-reset' && <><circle cx={12} cy={12} r={8} /><path d="M8 12 H16" /></>}
+      {name === 'undo' && <><path d="M9 7 L4 12 L9 17" /><path d="M4 12 H16 A4 4 0 0 1 20 16" /></>}
+      {name === 'redo' && <><path d="M15 7 L20 12 L15 17" /><path d="M20 12 H8 A4 4 0 0 0 4 16" /></>}
+    </svg>
+  );
+}
