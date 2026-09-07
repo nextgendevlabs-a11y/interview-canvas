@@ -17,7 +17,7 @@ export function getItemBounds(item: CanvasItem): Bounds {
     case 'sticky':
       return { x: item.x, y: item.y, width: item.width, height: item.height };
     case 'text':
-      return { x: item.x, y: item.y, width: item.width, height: item.height };
+      return { x: item.x, y: item.y, width: item.width ?? 260, height: item.height ?? 48 };
     case 'connector': {
       const from = getConnectorStart(item);
       const to = getConnectorEnd(item);

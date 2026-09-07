@@ -540,10 +540,13 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
           {snapshot.item_order.map((id) => {
             const item = snapshot.items[id];
             if (!item) return null;
+            const compatibleItem = item.kind === 'text'
+              ? { ...item, width: item.width ?? 260, height: item.height ?? 48 }
+              : item;
             const isSelected = selectedIds.includes(id);
             const previewItem = connectorPreview?.id === id ? connectorPreview
-              : resizePreview?.id === id && (item.kind === 'shape' || item.kind === 'sticky' || item.kind === 'text')
-              ? { ...item, width: resizePreview.width, height: resizePreview.height } : item;
+              : resizePreview?.id === id && (compatibleItem.kind === 'shape' || compatibleItem.kind === 'sticky' || compatibleItem.kind === 'text')
+              ? { ...compatibleItem, width: resizePreview.width, height: resizePreview.height } : compatibleItem;
             return (
               <g transform={isDragging && isSelected ? `translate(${dragDelta.x} ${dragDelta.y})` : undefined}>
               <CanvasItemRenderer
@@ -554,7 +557,7 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
                 editing={editingText === id}
                 editingValue={editingTextValue}
                 onEditingValueChange={setEditingTextValue}
-                onBeginEdit={() => startEditingItem(item)}
+                onBeginEdit={() => startEditingItem(compatibleItem)}
                 onEditingBlur={() => {
                   if (editingText) handleLabelEdit(editingText, editingTextValue);
                 }}
@@ -566,8 +569,10 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
           {selectedIds.length === 1 && (() => {
             const item = snapshot.items[selectedIds[0]];
             if (!item || (item.kind !== 'shape' && item.kind !== 'sticky' && item.kind !== 'text')) return null;
-            const width = resizePreview?.id === item.id ? resizePreview.width : item.width;
-            const height = resizePreview?.id === item.id ? resizePreview.height : item.height;
+            const baseWidth = item.kind === 'text' ? (item.width ?? 260) : item.width;
+            const baseHeight = item.kind === 'text' ? (item.height ?? 48) : item.height;
+            const width = resizePreview?.id === item.id ? resizePreview.width : baseWidth;
+            const height = resizePreview?.id === item.id ? resizePreview.height : baseHeight;
             return <rect x={item.x + width - 6} y={item.y + height - 6} width={12} height={12} rx={3} fill="#fff" stroke="#2563eb" strokeWidth={2} className="cursor-nwse-resize" onMouseDown={(e) => startResize(e, item)} />;
           })()}
 

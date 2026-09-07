@@ -167,6 +167,8 @@ class TextLabelElement(BaseModel):
     id: str
     x: float
     y: float
+    width: float = 260
+    height: float = 48
     text: str
     font_size: float
     color: str

@@ -19,11 +19,13 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   const [snapshot, setSnapshot] = useState<CanvasSnapshotData>(createEmptySnapshot());
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('reconnecting');
   const [elapsed, setElapsed] = useState(0);
+  const [roomColor, setRoomColor] = useState(participantColor);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
+  const ownerColorRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSnapshotRef = useRef<CanvasSnapshotData | null>(null);
 
@@ -31,6 +33,8 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
     const svc = getService();
     const details = await svc.getSession(sessionId);
     setSession(details.session);
+    const ownerParticipant = details.participants.find((p) => p.role === 'owner');
+    if (ownerParticipant && isOwner) setRoomColor(ownerParticipant.color);
     // Some guest/session responses contain only guest participants. Keep the
     // session owner visible to every participant in the room.
     const owner: Participant = {
@@ -39,7 +43,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
       user_id: details.session.owner_user_id,
       display_name: isOwner ? participantName : 'Owner',
       role: 'owner',
-      color: participantColor,
+      color: ownerParticipant?.color ?? ownerColorRef.current ?? participantColor,
       joined_at: details.session.created_at,
       left_at: null,
       is_active: true,
@@ -92,7 +96,8 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
 
   useEffect(() => {
     if (session?.state === 'live' && session.started_at) {
-      const start = new Date(session.started_at).getTime();
+      const raw = session.started_at;
+      const start = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`).getTime();
       setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
       const interval = setInterval(() => {
         setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
@@ -106,6 +111,15 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
     switch (msg.type) {
       case 'room_joined':
         setSnapshot(msg.snapshot);
+        if (!isOwner) {
+          const ownerPresence = msg.participants.find((p) => p.participant_id !== participantId);
+          if (ownerPresence) {
+            ownerColorRef.current = ownerPresence.color;
+            setParticipants((prev) => prev.map((p) => p.role === 'owner'
+              ? { ...p, display_name: ownerPresence.display_name, color: ownerPresence.color }
+              : p));
+          }
+        }
         setConnectionStatus('connected');
         break;
       case 'document_update':
@@ -338,7 +352,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
           <Canvas
             snapshot={snapshot}
             onSnapshotChange={handleSnapshotChange}
-            participantColor={participantColor}
+            participantColor={roomColor}
             participantName={participantName}
             canEdit={canEdit && !isEnded}
             onOperation={handleOperation}
