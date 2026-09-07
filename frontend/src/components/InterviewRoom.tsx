@@ -31,8 +31,23 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
     const svc = getService();
     const details = await svc.getSession(sessionId);
     setSession(details.session);
-    setParticipants(details.participants);
-  }, [sessionId]);
+    // Some guest/session responses contain only guest participants. Keep the
+    // session owner visible to every participant in the room.
+    const owner: Participant = {
+      id: `owner-${details.session.owner_user_id}`,
+      session_id: details.session.id,
+      user_id: details.session.owner_user_id,
+      display_name: isOwner ? participantName : 'Owner',
+      role: 'owner',
+      color: participantColor,
+      joined_at: details.session.created_at,
+      left_at: null,
+      is_active: true,
+    };
+    setParticipants(details.participants.some((p) => p.role === 'owner')
+      ? details.participants
+      : [owner, ...details.participants]);
+  }, [sessionId, isOwner, participantName, participantColor]);
 
   useEffect(() => {
     loadSession();
@@ -78,11 +93,13 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   useEffect(() => {
     if (session?.state === 'live' && session.started_at) {
       const start = new Date(session.started_at).getTime();
+      setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
       const interval = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - start) / 1000));
+        setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
       }, 1000);
       return () => clearInterval(interval);
     }
+    setElapsed(0);
   }, [session?.state, session?.started_at]);
 
   const handleWsMessage = (msg: WsOutboundMessage) => {
@@ -158,6 +175,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
   const handleStart = async () => {
     const svc = getService();
     const updated = await svc.startSession(sessionId);
+    setElapsed(0);
     setSession(updated);
   };
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement, ConnectorElement } from '@/services/types';
+import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement, StickyNoteElement } from '@/services/types';
 import { applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo, type CanvasHistory } from '@/canvas/reducer';
 import { PALETTE_CATEGORIES, PALETTE, getPaletteComponent } from '@/canvas/palette';
 import { hitTest, hitTestRect, computeBounds, getItemBounds, getConnectorAnchorPoint, getShapeCenter } from '@/canvas/geometry';
@@ -31,6 +31,7 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [zoom, setZoom] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -41,13 +42,11 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [connectorDraft, setConnectorDraft] = useState<ConnectorDraft | null>(null);
   const [editingText, setEditingText] = useState<string | null>(null);
   const [editingTextValue, setEditingTextValue] = useState('');
+  const [resizeDraft, setResizeDraft] = useState<{ id: string; startX: number; startY: number; width: number; height: number } | null>(null);
+  const [resizePreview, setResizePreview] = useState<{ id: string; width: number; height: number } | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [history, setHistory] = useState<CanvasHistory>(createHistory());
   const svgRef = useRef<SVGSVGElement>(null);
-  const selectedConnector = selectedIds.length === 1 && snapshot.items[selectedIds[0]]?.kind === 'connector'
-    ? snapshot.items[selectedIds[0]] as ConnectorElement
-    : null;
-
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -159,8 +158,19 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
       return;
     }
 
+    if (resizeDraft) {
+      const width = Math.max(80, resizeDraft.width + (world.x - resizeDraft.startX));
+      const height = Math.max(48, resizeDraft.height + (world.y - resizeDraft.startY));
+      setResizePreview({ id: resizeDraft.id, width, height });
+      return;
+    }
+
     if (isDragging && selectedIds.length > 0) {
-      // Visual feedback only - actual move on mouse up
+      const firstItem = snapshot.items[selectedIds[0]];
+      if (firstItem) {
+        const bounds = getItemBounds(firstItem);
+        setDragDelta({ x: world.x - dragOffset.x - bounds.x, y: world.y - dragOffset.y - bounds.y });
+      }
       return;
     }
   };
@@ -168,6 +178,13 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isPanning) {
       setIsPanning(false);
+      return;
+    }
+
+    if (resizeDraft) {
+      if (resizePreview) applyAndBroadcast({ op: 'resize', id: resizeDraft.id, width: resizePreview.width, height: resizePreview.height });
+      setResizeDraft(null);
+      setResizePreview(null);
       return;
     }
 
@@ -219,12 +236,11 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
 
     if (isDragging && selectedIds.length > 0) {
       const world = screenToWorld(e.clientX, e.clientY);
-      const newX = world.x - dragOffset.x;
       const newY = world.y - dragOffset.y;
       const firstItem = snapshot.items[selectedIds[0]];
       if (firstItem) {
         const bounds = getItemBounds(firstItem);
-        const dx = newX - bounds.x;
+        const dx = world.x - dragOffset.x - bounds.x;
         const dy = newY - bounds.y;
         if (dx !== 0 || dy !== 0) {
           const op: CanvasOperation = { op: 'move', ids: selectedIds, dx, dy };
@@ -232,7 +248,16 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
         }
       }
       setIsDragging(false);
+      setDragDelta({ x: 0, y: 0 });
     }
+  };
+
+  const startResize = (e: React.MouseEvent, item: ShapeElement | StickyNoteElement) => {
+    e.stopPropagation();
+    if (!canEdit) return;
+    const world = screenToWorld(e.clientX, e.clientY);
+    setResizeDraft({ id: item.id, startX: world.x, startY: world.y, width: item.width, height: item.height });
+    setResizePreview({ id: item.id, width: item.width, height: item.height });
   };
 
   const applyAndBroadcast = (op: CanvasOperation) => {
@@ -333,12 +358,6 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
     } else if (item.kind === 'text' || item.kind === 'sticky') {
       setEditingTextValue(item.text);
     }
-  };
-
-  const updateConnector = (updates: Partial<ConnectorElement>) => {
-    if (!selectedConnector) return;
-    const updated: ConnectorElement = { ...selectedConnector, ...updates };
-    applyAndBroadcast({ op: 'update', item: updated });
   };
 
   useEffect(() => {
@@ -452,15 +471,30 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
         </defs>
         <rect width="100%" height="100%" fill="url(#grid)" />
         <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+          {/* Motion trail keeps the original position visible while an object is being dragged. */}
+          {isDragging && selectedIds.length > 0 && (() => {
+            const first = snapshot.items[selectedIds[0]];
+            if (!first || (dragDelta.x === 0 && dragDelta.y === 0)) return null;
+            const bounds = getItemBounds(first);
+            return (
+              <g pointerEvents="none" opacity={0.45}>
+                <rect x={bounds.x} y={bounds.y} width={Math.max(bounds.width, 12)} height={Math.max(bounds.height, 12)} fill="none" stroke={participantColor} strokeWidth={2} strokeDasharray="6 5" rx={6} />
+                <line x1={bounds.x + bounds.width / 2} y1={bounds.y + bounds.height / 2} x2={bounds.x + bounds.width / 2 + dragDelta.x} y2={bounds.y + bounds.height / 2 + dragDelta.y} stroke={participantColor} strokeWidth={2} strokeDasharray="4 4" />
+              </g>
+            );
+          })()}
           {/* Render items */}
           {snapshot.item_order.map((id) => {
             const item = snapshot.items[id];
             if (!item) return null;
             const isSelected = selectedIds.includes(id);
+            const previewItem = resizePreview?.id === id && (item.kind === 'shape' || item.kind === 'sticky')
+              ? { ...item, width: resizePreview.width, height: resizePreview.height } : item;
             return (
+              <g transform={isDragging && isSelected ? `translate(${dragDelta.x} ${dragDelta.y})` : undefined}>
               <CanvasItemRenderer
                 key={id}
-                item={item}
+                item={previewItem}
                 selected={isSelected}
                 allItems={snapshot.items}
                 editing={editingText === id}
@@ -471,8 +505,17 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
                   if (editingText) handleLabelEdit(editingText, editingTextValue);
                 }}
               />
+              </g>
             );
           })}
+
+          {selectedIds.length === 1 && (() => {
+            const item = snapshot.items[selectedIds[0]];
+            if (!item || (item.kind !== 'shape' && item.kind !== 'sticky')) return null;
+            const width = resizePreview?.id === item.id ? resizePreview.width : item.width;
+            const height = resizePreview?.id === item.id ? resizePreview.height : item.height;
+            return <rect x={item.x + width - 6} y={item.y + height - 6} width={12} height={12} rx={3} fill="#fff" stroke="#2563eb" strokeWidth={2} className="cursor-nwse-resize" onMouseDown={(e) => startResize(e, item)} />;
+          })()}
 
           {/* Render freehand in progress */}
           {isDrawing && freehandPoints.length > 0 && (
@@ -518,80 +561,6 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
           )}
         </g>
       </svg>
-
-      {selectedConnector && canEdit && (
-        <div className="absolute right-4 bottom-20 z-20 w-72 bg-white rounded-xl shadow-lg border border-slate-200 p-3">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Connector</div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Label</label>
-          <input
-            type="text"
-            value={selectedConnector.label}
-            onMouseDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            onChange={(e) => updateConnector({ label: e.target.value })}
-            className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-          />
-
-          <div className="mt-3">
-            <div className="text-xs font-medium text-slate-500 mb-1">Style</div>
-            <div className="grid grid-cols-3 gap-1">
-              {(['straight', 'elbow', 'curved'] as const).map((style) => (
-                <button
-                  key={style}
-                  onClick={() => updateConnector({ style })}
-                  className={`px-2 py-1.5 text-xs rounded-lg border capitalize ${
-                    selectedConnector.style === style ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {style}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <label className="flex items-center gap-1.5 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={selectedConnector.arrow_start}
-                onChange={(e) => updateConnector({ arrow_start: e.target.checked })}
-              />
-              Start
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={selectedConnector.arrow_end}
-                onChange={(e) => updateConnector({ arrow_end: e.target.checked })}
-              />
-              End
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={selectedConnector.dashed}
-                onChange={(e) => updateConnector({ dashed: e.target.checked })}
-              />
-              Dashed
-            </label>
-          </div>
-
-          <div className="mt-3">
-            <div className="text-xs font-medium text-slate-500 mb-1">Color</div>
-            <div className="flex gap-1.5">
-              {['#475569', '#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c'].map((color) => (
-                <button
-                  key={color}
-                  onClick={() => updateConnector({ color })}
-                  className={`w-6 h-6 rounded-full border-2 ${selectedConnector.color === color ? 'border-slate-900' : 'border-white'}`}
-                  style={{ backgroundColor: color }}
-                  title={color}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Bottom controls */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-white rounded-xl shadow-lg border border-slate-200 px-2 py-1.5">
