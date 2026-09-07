@@ -61,7 +61,7 @@ export function applyOperation(snapshot: CanvasSnapshotData, op: CanvasOperation
     case 'resize': {
       const item = snapshot.items[op.id];
       if (!item) return snapshot;
-      if (item.kind === 'shape' || item.kind === 'sticky') {
+      if (item.kind === 'shape' || item.kind === 'sticky' || item.kind === 'text') {
         return { ...snapshot, items: { ...snapshot.items, [op.id]: { ...item, width: op.width, height: op.height } } };
       }
       return snapshot;
@@ -258,6 +258,8 @@ export function createText(
     kind: 'text',
     x,
     y,
+    width: 260,
+    height: 48,
     text,
     font_size,
     color,

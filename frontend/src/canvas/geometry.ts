@@ -17,7 +17,7 @@ export function getItemBounds(item: CanvasItem): Bounds {
     case 'sticky':
       return { x: item.x, y: item.y, width: item.width, height: item.height };
     case 'text':
-      return { x: item.x, y: item.y, width: 200, height: item.font_size + 8 };
+      return { x: item.x, y: item.y, width: item.width, height: item.height };
     case 'connector': {
       const from = getConnectorStart(item);
       const to = getConnectorEnd(item);
@@ -136,7 +136,7 @@ export function hitTest(
       if (!from || !to) continue;
       if (distanceToStroke(point, [from, to], 8)) return item.id;
     } else if (item.kind === 'text') {
-      if (pointInBounds(point, { ...bounds, width: 200, height: item.font_size + 8 })) return item.id;
+      if (pointInBounds(point, bounds)) return item.id;
     } else {
       if (pointInBounds(point, bounds)) return item.id;
     }
@@ -155,7 +155,7 @@ export function hitTestRect(
     if (!item) continue;
     const bounds = getItemBounds(item);
     if (item.kind === 'text') {
-      if (boundsIntersect({ ...bounds, width: 200, height: item.font_size + 8 }, rect)) result.push(id);
+      if (boundsIntersect(bounds, rect)) result.push(id);
     } else {
       if (boundsIntersect(bounds, rect)) result.push(id);
     }

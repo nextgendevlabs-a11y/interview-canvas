@@ -155,6 +155,8 @@ export interface TextLabelElement {
   kind: 'text';
   x: number;
   y: number;
+  width: number;
+  height: number;
   text: string;
   font_size: number;
   color: string;

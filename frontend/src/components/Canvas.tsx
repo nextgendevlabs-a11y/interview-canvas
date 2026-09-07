@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement, StickyNoteElement } from '@/services/types';
+import type { CanvasSnapshotData, CanvasItem, CanvasOperation, ShapeElement, StickyNoteElement, TextLabelElement, ConnectorElement } from '@/services/types';
 import { applyOperation, createShape, createConnector, createFreehandStroke, createText, createSticky, createHistory, pushHistory, undo, redo, type CanvasHistory } from '@/canvas/reducer';
 import { PALETTE_CATEGORIES, PALETTE, getPaletteComponent } from '@/canvas/palette';
 import { hitTest, hitTestRect, computeBounds, getItemBounds, getConnectorAnchorPoint, getShapeCenter } from '@/canvas/geometry';
@@ -16,13 +16,39 @@ interface CanvasProps {
 }
 
 const GRID_SIZE = 20;
-const TEXT_BOX_WIDTH = 260;
 const TEXT_LINE_HEIGHT = 20;
 
 interface ConnectorDraft {
   fromId: string;
   start: { x: number; y: number };
   current: { x: number; y: number };
+}
+
+type ResizableItem = ShapeElement | StickyNoteElement | TextLabelElement;
+type ConnectorEndpoint = 'from' | 'to';
+
+function connectorPoints(item: ConnectorElement, allItems: Record<string, CanvasItem>) {
+  let from = item.from_point;
+  let to = item.to_point;
+  if (item.from_id && allItems[item.from_id]?.kind === 'shape') {
+    const shape = allItems[item.from_id] as ShapeElement;
+    from = getConnectorAnchorPoint(shape, to ?? getShapeCenter(shape));
+  }
+  if (item.to_id && allItems[item.to_id]?.kind === 'shape') {
+    const shape = allItems[item.to_id] as ShapeElement;
+    to = getConnectorAnchorPoint(shape, from ?? getShapeCenter(shape));
+  }
+  return from && to ? { from, to } : null;
+}
+
+function snapEndpoint(point: { x: number; y: number }, allItems: Record<string, CanvasItem>, excludeId: string) {
+  for (const item of Object.values(allItems)) {
+    if (item.id === excludeId || item.kind !== 'shape') continue;
+    if (point.x >= item.x && point.x <= item.x + item.width && point.y >= item.y && point.y <= item.y + item.height) {
+      return { id: item.id, point: null as { x: number; y: number } | null, anchor: getConnectorAnchorPoint(item, point) };
+    }
+  }
+  return { id: null, point, anchor: point };
 }
 
 export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, onOperation }: CanvasProps) {
@@ -44,6 +70,8 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
   const [editingTextValue, setEditingTextValue] = useState('');
   const [resizeDraft, setResizeDraft] = useState<{ id: string; startX: number; startY: number; width: number; height: number } | null>(null);
   const [resizePreview, setResizePreview] = useState<{ id: string; width: number; height: number } | null>(null);
+  const [endpointDrag, setEndpointDrag] = useState<{ id: string; endpoint: ConnectorEndpoint } | null>(null);
+  const [connectorPreview, setConnectorPreview] = useState<ConnectorElement | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [history, setHistory] = useState<CanvasHistory>(createHistory());
   const svgRef = useRef<SVGSVGElement>(null);
@@ -165,6 +193,17 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
       return;
     }
 
+    if (endpointDrag) {
+      const item = snapshot.items[endpointDrag.id];
+      if (item?.kind === 'connector') {
+        const snapped = snapEndpoint(world, snapshot.items, endpointDrag.id);
+        setConnectorPreview({ ...item, ...(endpointDrag.endpoint === 'from'
+          ? { from_id: snapped.id, from_point: snapped.point }
+          : { to_id: snapped.id, to_point: snapped.point }) });
+      }
+      return;
+    }
+
     if (isDragging && selectedIds.length > 0) {
       const firstItem = snapshot.items[selectedIds[0]];
       if (firstItem) {
@@ -185,6 +224,13 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
       if (resizePreview) applyAndBroadcast({ op: 'resize', id: resizeDraft.id, width: resizePreview.width, height: resizePreview.height });
       setResizeDraft(null);
       setResizePreview(null);
+      return;
+    }
+
+    if (endpointDrag && connectorPreview) {
+      applyAndBroadcast({ op: 'update', item: connectorPreview });
+      setEndpointDrag(null);
+      setConnectorPreview(null);
       return;
     }
 
@@ -252,12 +298,19 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
     }
   };
 
-  const startResize = (e: React.MouseEvent, item: ShapeElement | StickyNoteElement) => {
+  const startResize = (e: React.MouseEvent, item: ResizableItem) => {
     e.stopPropagation();
     if (!canEdit) return;
     const world = screenToWorld(e.clientX, e.clientY);
     setResizeDraft({ id: item.id, startX: world.x, startY: world.y, width: item.width, height: item.height });
     setResizePreview({ id: item.id, width: item.width, height: item.height });
+  };
+
+  const startEndpointDrag = (e: React.MouseEvent, item: ConnectorElement, endpoint: ConnectorEndpoint) => {
+    e.stopPropagation();
+    if (!canEdit) return;
+    setEndpointDrag({ id: item.id, endpoint });
+    setConnectorPreview(item);
   };
 
   const applyAndBroadcast = (op: CanvasOperation) => {
@@ -488,7 +541,8 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
             const item = snapshot.items[id];
             if (!item) return null;
             const isSelected = selectedIds.includes(id);
-            const previewItem = resizePreview?.id === id && (item.kind === 'shape' || item.kind === 'sticky')
+            const previewItem = connectorPreview?.id === id ? connectorPreview
+              : resizePreview?.id === id && (item.kind === 'shape' || item.kind === 'sticky' || item.kind === 'text')
               ? { ...item, width: resizePreview.width, height: resizePreview.height } : item;
             return (
               <g transform={isDragging && isSelected ? `translate(${dragDelta.x} ${dragDelta.y})` : undefined}>
@@ -511,10 +565,21 @@ export function Canvas({ snapshot, onSnapshotChange, participantColor, canEdit, 
 
           {selectedIds.length === 1 && (() => {
             const item = snapshot.items[selectedIds[0]];
-            if (!item || (item.kind !== 'shape' && item.kind !== 'sticky')) return null;
+            if (!item || (item.kind !== 'shape' && item.kind !== 'sticky' && item.kind !== 'text')) return null;
             const width = resizePreview?.id === item.id ? resizePreview.width : item.width;
             const height = resizePreview?.id === item.id ? resizePreview.height : item.height;
             return <rect x={item.x + width - 6} y={item.y + height - 6} width={12} height={12} rx={3} fill="#fff" stroke="#2563eb" strokeWidth={2} className="cursor-nwse-resize" onMouseDown={(e) => startResize(e, item)} />;
+          })()}
+
+          {selectedIds.length === 1 && (() => {
+            const raw = snapshot.items[selectedIds[0]];
+            if (!raw || raw.kind !== 'connector' || !canEdit) return null;
+            const points = connectorPoints(connectorPreview ?? raw, snapshot.items);
+            if (!points) return null;
+            return <>
+              <circle cx={points.from.x} cy={points.from.y} r={7} fill="#fff" stroke="#2563eb" strokeWidth={2} className="cursor-crosshair" onMouseDown={(e) => startEndpointDrag(e, raw, 'from')} />
+              <circle cx={points.to.x} cy={points.to.y} r={7} fill="#fff" stroke="#2563eb" strokeWidth={2} className="cursor-crosshair" onMouseDown={(e) => startEndpointDrag(e, raw, 'to')} />
+            </>;
           })()}
 
           {/* Render freehand in progress */}
@@ -762,13 +827,12 @@ function CanvasItemRenderer({
   }
 
   if (item.kind === 'text') {
-    const textLines = Math.max(1, editingValue.split('\n').length);
-    const editorHeight = Math.max(44, Math.min(180, textLines * TEXT_LINE_HEIGHT + 16));
-    const displayHeight = Math.max(32, item.text.split('\n').length * TEXT_LINE_HEIGHT + 8);
+    const boxWidth = item.width;
+    const boxHeight = item.height;
     return (
       <g>
         {editing ? (
-          <foreignObject x={item.x} y={item.y - 4} width={TEXT_BOX_WIDTH} height={editorHeight}>
+          <foreignObject x={item.x} y={item.y} width={boxWidth} height={boxHeight}>
             <textarea
               autoFocus
               value={editingValue}
@@ -785,7 +849,7 @@ function CanvasItemRenderer({
             />
           </foreignObject>
         ) : (
-          <foreignObject x={item.x} y={item.y} width={TEXT_BOX_WIDTH} height={displayHeight}>
+          <foreignObject x={item.x} y={item.y} width={boxWidth} height={boxHeight}>
             <div
               className="font-medium whitespace-pre-wrap break-words select-none cursor-text"
               style={{ color: item.color, fontSize: item.font_size, lineHeight: `${TEXT_LINE_HEIGHT}px` }}
@@ -802,8 +866,8 @@ function CanvasItemRenderer({
           <rect
             x={item.x - 4}
             y={item.y - 4}
-            width={TEXT_BOX_WIDTH + 8}
-            height={(editing ? editorHeight : displayHeight) + 8}
+            width={boxWidth + 8}
+            height={boxHeight + 8}
             rx={4}
             fill="none"
             stroke={strokeColor}
@@ -816,18 +880,9 @@ function CanvasItemRenderer({
   }
 
   if (item.kind === 'connector') {
-    let from = item.from_point;
-    let to = item.to_point;
-    if (item.from_id && allItems[item.from_id]?.kind === 'shape') {
-      const fromShape = allItems[item.from_id] as ShapeElement;
-      const target = to ?? getShapeCenter(fromShape);
-      from = getConnectorAnchorPoint(fromShape, target);
-    }
-    if (item.to_id && allItems[item.to_id]?.kind === 'shape') {
-      const toShape = allItems[item.to_id] as ShapeElement;
-      const source = from ?? getShapeCenter(toShape);
-      to = getConnectorAnchorPoint(toShape, source);
-    }
+    const points = connectorPoints(item, allItems);
+    const from = points?.from;
+    const to = points?.to;
     if (!from || !to) return null;
 
     let path: string;
