@@ -82,6 +82,12 @@ async def session_socket(websocket: WebSocket, session_id: str, participant_id: 
         return
     if token_participant_id:
         participant_id = token_participant_id
+    elif user:
+        # The owner UI uses a local "owner" route id. Resolve it to the
+        # persisted participant so presence has the real name and color.
+        owner = next((p for p in record.participants if p.user_id == user.id and p.role == "owner"), None)
+        if owner:
+            participant_id = owner.id
     await connection_manager.connect(session_id, websocket)
     record.presence[participant_id] = participant_presence(participant_id).model_dump()
     try:

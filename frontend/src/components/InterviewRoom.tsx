@@ -3,6 +3,7 @@ import { getService } from '@/services';
 import type { CanvasSnapshotData, CanvasOperation, InterviewSession, Participant, WsOutboundMessage } from '@/services/types';
 import { Canvas } from '@/components/Canvas';
 import { createEmptySnapshot, applyOperation } from '@/canvas/reducer';
+import { PARTICIPANT_COLORS } from '@/canvas/palette';
 
 interface InterviewRoomProps {
   sessionId: string;
@@ -43,7 +44,7 @@ export function InterviewRoom({ sessionId, participantId, participantColor, part
       user_id: details.session.owner_user_id,
       display_name: isOwner ? participantName : 'Owner',
       role: 'owner',
-      color: ownerParticipant?.color ?? ownerColorRef.current ?? participantColor,
+      color: ownerParticipant?.color ?? ownerColorRef.current ?? PARTICIPANT_COLORS[0],
       joined_at: details.session.created_at,
       left_at: null,
       is_active: true,

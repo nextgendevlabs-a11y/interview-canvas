@@ -81,14 +81,14 @@ def start_session(id: str, user: User = Depends(get_current_user)) -> InterviewS
 
 
 @router.post("/{id}/end", response_model=InterviewSession)
-def end_session(id: str, user: User = Depends(get_current_user)) -> InterviewSession:
+async def end_session(id: str, user: User = Depends(get_current_user)) -> InterviewSession:
     from backend.main import connection_manager, store
 
     require_owner(id, user)
     session = store.end_session(id)
     if session is None:
         raise api_error(404, "not_found", "Session not found.")
-    connection_manager.broadcast_json(id, {"type": "session_ended", "session_id": id})
+    await connection_manager.broadcast(id, {"type": "session_ended", "session_id": id})
     return session
 
 
